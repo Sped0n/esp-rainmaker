@@ -11,7 +11,11 @@
 #include <esp_err.h>
 #include <esp_matter.h>
 
+#if CONFIG_ESP_MATTER_ENABLE_MATTER_SERVER
 esp_err_t app_matter_init(esp_matter::attribute::callback_t app_attribute_update_cb, esp_matter::identification::callback_t app_identification_cb);
+#else
+esp_err_t app_matter_init(void);
+#endif
 esp_err_t app_matter_start(esp_matter::event_callback_t app_event_cb);
 esp_err_t app_matter_rmaker_init();
 esp_err_t app_matter_rmaker_start();

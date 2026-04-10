@@ -15,7 +15,9 @@ using namespace esp_matter;
 
 static const char *TAG = "app_matter";
 
-esp_err_t app_matter_init(attribute::callback_t app_attribute_update_cb, identification::callback_t app_identification_cb)
+#if CONFIG_ESP_MATTER_ENABLE_MATTER_SERVER
+esp_err_t app_matter_init(esp_matter::attribute::callback_t app_attribute_update_cb,
+                          esp_matter::identification::callback_t app_identification_cb)
 {
     /* Create a Matter node */
     node::config_t node_config;
@@ -29,6 +31,12 @@ esp_err_t app_matter_init(attribute::callback_t app_attribute_update_cb, identif
 
     return ESP_OK;
 }
+#else
+esp_err_t app_matter_init(void)
+{
+    return ESP_OK;
+}
+#endif
 
 esp_err_t app_matter_start(event_callback_t app_event_cb)
 {
