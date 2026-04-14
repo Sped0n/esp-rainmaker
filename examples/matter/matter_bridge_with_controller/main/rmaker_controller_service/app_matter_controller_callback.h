@@ -8,6 +8,6 @@
 
 #pragma once
 
-#include <app_matter_controller.h>
+#include "app_matter_controller.h"
 
 esp_err_t app_matter_controller_callback(matter_controller_handle_t *handle, matter_controller_callback_type_t type);

@@ -12,7 +12,7 @@
 #include <matter_device.h>
 #include <stdint.h>
 
-#include <app_matter_controller.h>
+#include "app_matter_controller.h"
 
 namespace esp_matter {
 namespace console {
