@@ -91,3 +91,8 @@ docs/docusaurus/website/node_modules
 *.rej
 *.orig
 
+# clangd
+.cache
+
+# esp-matter-mfg-tools
+out/
