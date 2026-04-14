@@ -1131,7 +1131,6 @@ static int fetch_matter_node_list_size(const char *endpoint_url, const char *acc
                       "rainmaker_group_id cannot be NULL");
 
   ESP_LOGD(TAG,"Access Token: %s",access_token);
-  esp_err_t ret = ESP_OK;
   char url[200];
   int http_len, http_status_code;
   char *http_payload = NULL;
@@ -1152,21 +1151,29 @@ static int fetch_matter_node_list_size(const char *endpoint_url, const char *acc
   esp_http_client_handle_t client = esp_http_client_init(&config);
   ESP_RETURN_ON_FALSE(client, ESP_FAIL, TAG,
                       "Failed to initialise HTTP Client.");
-  ESP_GOTO_ON_ERROR(
-      esp_http_client_set_header(client, "accept", "application/json"), cleanup,
-      TAG, "Failed to set HTTP header accept");
-  ESP_GOTO_ON_ERROR(
-      esp_http_client_set_header(client, "Authorization", access_token),
-      cleanup, TAG, "Failed to set HTTP header Authorization");
+  if (esp_http_client_set_header(client, "accept", "application/json") != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to set HTTP header accept");
+    goto cleanup;
+  }
+  if (esp_http_client_set_header(client, "Authorization", access_token) != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to set HTTP header Authorization");
+    goto cleanup;
+  }
   // HTTP GET Method
-  ESP_GOTO_ON_ERROR(esp_http_client_set_method(client, HTTP_METHOD_GET),
-                    cleanup, TAG, "Failed to set HTTP method");
-  ESP_GOTO_ON_ERROR(esp_http_client_open(client, 0), cleanup, TAG,
-                    "Failed to open HTTP connection");
+  if (esp_http_client_set_method(client, HTTP_METHOD_GET) != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to set HTTP method");
+    goto cleanup;
+  }
+  if (esp_http_client_open(client, 0) != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to open HTTP connection");
+    goto cleanup;
+  }
 
   http_payload = (char *)MEM_CALLOC_EXTRAM(http_payload_size, sizeof(char));
-  ESP_GOTO_ON_FALSE(http_payload, ESP_ERR_NO_MEM, cleanup, TAG,
-                    "Failed to allocate memory for http_payload");
+  if (!http_payload) {
+    ESP_LOGE(TAG, "Failed to allocate memory for http_payload");
+    goto cleanup;
+  }
 
   // Read Response
   http_len = esp_http_client_fetch_headers(client);
@@ -1179,7 +1186,6 @@ static int fetch_matter_node_list_size(const char *endpoint_url, const char *acc
     ESP_LOGE(TAG, "Invalid response for %s", url);
     ESP_LOGE(TAG, "Status = %d, Data = %s", http_status_code,
              http_len > 0 ? http_payload : "None");
-    ret = http_status_code == 401 ? ESP_ERR_INVALID_STATE : ESP_FAIL;
     goto close;
   }
 
@@ -1429,9 +1435,22 @@ static esp_err_t get_node_metadata(jparse_ctx_t *jctx, matter_device_t *dev) {
           int ep_count = 0;
           int ep_id = 1;
           if (json_obj_get_array(jctx, "endpointsData", &ep_count) == 0) {
-            json_arr_get_int(jctx, 1, &ep_id);
+            int candidate_ep_id = 0;
+            bool found_non_root_endpoint = false;
+            for (int i = 0; i < ep_count; ++i) {
+              if (json_arr_get_int(jctx, i, &candidate_ep_id) == 0 && candidate_ep_id != 0) {
+                ep_id = candidate_ep_id;
+                found_non_root_endpoint = true;
+                break;
+              }
+            }
+            if (!found_non_root_endpoint && ep_count > 0) {
+              json_arr_get_int(jctx, 0, &ep_id);
+            }
             dev->endpoints[0].endpoint_id = ep_id;
             json_obj_leave_array(jctx);
+          } else {
+            dev->endpoints[0].endpoint_id = ep_id;
           }
           dev->endpoint_count = 1;
         }
