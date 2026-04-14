@@ -22,7 +22,7 @@
 #include <lib/support/Span.h>
 
 #include <app_matter_controller.h>
-#include <app_matter_controller_creds_issuer.h>
+#include <app_matter_noc_manager.h>
 #include <matter_controller_std.h>
 
 #define TAG "MatterController"
@@ -31,6 +31,7 @@
 
 static matter_controller_handle_t *s_matter_controller_handle = NULL;
 static matter_controller_callback_t s_matter_controller_callback = NULL;
+static bool s_device_list_pulled_at_startup = false;
 
 //static void debug_print()
 //{
@@ -161,7 +162,7 @@ static esp_err_t update_base_url(const char *base_url, const esp_rmaker_device_t
             esp_rmaker_str(s_matter_controller_handle->base_url ? s_matter_controller_handle->base_url : "");
         ESP_RETURN_ON_ERROR(esp_rmaker_param_update_and_report(param, val), TAG, "Failed to update and report base URL");
     }
-    // User token and rmaker group id will be invalid after updating base URL
+    // User token and the discovered group/fabric mapping will be invalid after updating base URL.
     ESP_RETURN_ON_ERROR(update_user_token(NULL, service, ctx), TAG, "Failed to update user token");
     return update_rmaker_group_id(NULL, service, ctx);
 }
@@ -227,11 +228,17 @@ esp_err_t matter_controller_handle_update()
             }
         }
     }
-    if (handle->base_url && handle->access_token && handle->rmaker_group_id && handle->matter_fabric_id == 0) {
-        // Fetch Matter Fabric ID
+    if (handle->base_url && handle->access_token && handle->matter_fabric_id == 0) {
         ESP_RETURN_ON_ERROR(
-            s_matter_controller_callback(handle, MATTER_CONTROLLER_CALLBACK_TYPE_QUERY_MATTER_FABRIC_ID),
-            TAG, "Failed on fetching Matter Fabric ID");
+            s_matter_controller_callback(handle, MATTER_CONTROLLER_CALLBACK_TYPE_DISCOVER_RMAKER_GROUP),
+            TAG, "Failed on discovering RainMaker group ID");
+    }
+    if (handle->base_url && handle->access_token && handle->rmaker_group_id && handle->matter_fabric_id != 0 &&
+        !s_device_list_pulled_at_startup) {
+        s_device_list_pulled_at_startup = true;
+        ESP_RETURN_ON_ERROR(
+            s_matter_controller_callback(handle, MATTER_CONTROLLER_CALLBACK_TYPE_UPDATE_DEVICE),
+            TAG, "Failed on startup device list update");
     }
     if (handle->base_url && handle->access_token && handle->rmaker_group_id && handle->matter_fabric_id != 0 &&
         handle->matter_node_id == 0) {
@@ -256,6 +263,19 @@ esp_err_t matter_controller_handle_update()
     return ESP_OK;
 }
 
+esp_err_t matter_controller_sync_node_id()
+{
+    if (!s_matter_controller_handle) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = app_matter_noc_manager_sync_commissioned_node(s_matter_controller_handle);
+    if (err == ESP_OK) {
+        report_matter_node_id(s_matter_controller_handle->matter_node_id);
+        return matter_controller_handle_update();
+    }
+    return err;
+}
+
 static esp_err_t write_cb(const esp_rmaker_device_t *device, const esp_rmaker_param_t *param,
                           const esp_rmaker_param_val_t val, void *priv_data, esp_rmaker_write_ctx_t *ctx)
 {
@@ -276,7 +296,10 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device, const esp_rmaker_pa
         if (val.type != RMAKER_VAL_TYPE_STRING || !val.val.s) {
             return ESP_ERR_INVALID_ARG;
         }
-        ESP_RETURN_ON_ERROR(update_rmaker_group_id(val.val.s, device, ctx), TAG, "Failed to update rmaker_group_id");
+        if (ctx->src == ESP_RMAKER_REQ_SRC_INIT) {
+            ESP_RETURN_ON_ERROR(update_rmaker_group_id(val.val.s, device, ctx), TAG,
+                                "Failed to restore persisted rmaker_group_id");
+        }
     } else if (strcmp(esp_rmaker_param_get_type(param), ESP_RMAKER_PARAM_MATTER_CTL_CMD) == 0) {
         if (val.type != RMAKER_VAL_TYPE_INTEGER) {
             return ESP_ERR_INVALID_ARG;
@@ -308,8 +331,11 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device, const esp_rmaker_pa
     }
 
     if (ctx->src != ESP_RMAKER_REQ_SRC_INIT) {
-        // The updating function might need internet connection, so we do not call it when initializing.
-        return matter_controller_handle_update();
+        // The cloud can send these params in separate writes. Start the controller flow once
+        // the base URL and refresh token are present; group id is rediscovered from the local fabric.
+        if (s_matter_controller_handle->base_url && s_matter_controller_handle->user_token) {
+            return matter_controller_handle_update();
+        }
     }
     return ESP_OK;
 }
@@ -344,8 +370,6 @@ esp_err_t matter_controller_enable(uint16_t matter_vendor_id, matter_controller_
         return err;
     }
 
-    static example_op_creds_issuer s_matter_controller_creds_issuer(s_matter_controller_handle);
-    esp_matter::controller::set_custom_credentials_issuer(&s_matter_controller_creds_issuer);
     return ESP_OK;
 }
 
