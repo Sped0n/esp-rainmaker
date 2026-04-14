@@ -1,6 +1,6 @@
 # Matter Controller Service
 
-The Matter Controller Service offers an interface for managing the Matter-Controller RainMaker device which does not implement the Matter Server Instance and therefore without custom controller cluster.
+The Matter Controller Service offers an interface for managing the Matter-Controller RainMaker device after it has booted as a Matter bridge and joined a Matter fabric.
 
 ## 1. Service
 
@@ -31,7 +31,9 @@ This parameter stores the refresh token. This parameter SHALL be used to fetched
 
 ### 2.3 RMakerGroupID Parameter
 
-This parameter stores the Rainmaker Group Id which is bound to the Matter Fabric Id. In RainMaker Matter Fabric, each RainMaker group corresponds to a Matter Fabric.
+This parameter reports the RainMaker Group Id that the controller auto-discovers for the local commissioned Matter fabric. In RainMaker Matter Fabric, each RainMaker group corresponds to a Matter Fabric.
+
+`RMakerGroupID` remains writable in the service contract for compatibility, but the controller runtime currently ignores incoming writes and overwrites the value with the discovered group id during startup.
 
 ### 2.4 MatterNodeID Parameter
 
@@ -72,12 +74,26 @@ This parameter is a bitmap value which corresponds to the status of Matter Contr
 
 Here are the steps for Matter controller initialization.
 
-- Matter controller get network credentials with wifi-provisioning or other custom methods
+- Device boots as a Matter bridge and creates an aggregator endpoint before `esp_matter::start(...)`.
 
-- Phone APP sends `setparams` command with the `--data` payload `{"MatterCTL":{"BaseURL": <base-url>, "UserToken": <refresh-token>, "RMakerGroupID": <rainmaker-group-id>}}`
+- Matter controller gets network credentials with wifi-provisioning or other custom methods.
+
+- User commissions the device into a Matter fabric as that bridge.
+
+- Phone APP sends `setparams` command with the `--data` payload `{"MatterCTL":{"BaseURL": <base-url>, "UserToken": <refresh-token>}}`
+
+- Controller service fetches an access token and inspects the local commissioned Matter fabric table.
+
+- Controller service auto-discovers the `RMakerGroupID` that matches the commissioned bridge fabric.
 
 - Phone APP receives report of `MTCtlStatus` with all the bits set to `true` before timeout.
+
+- Phone APP receives report of the auto-discovered `RMakerGroupID`.
+
+- Controller service issues and installs the controller NOC on that same commissioned bridge fabric.
 
 - Phone App receives report of `MatterNodeID` and it will never establish CASE session with that node ID.
 
 - Phone APP sends `setparams` command with the `--data` payload `{"MatterCTL":{"MTCtlCMD": 2}}` to make the controller obtain the device list in the Matter Fabric.
+
+If no local commissioned fabric exists yet, auto-discovery stops until bridge commissioning completes.

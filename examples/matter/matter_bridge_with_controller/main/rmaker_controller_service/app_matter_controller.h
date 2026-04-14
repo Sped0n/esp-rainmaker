@@ -41,6 +41,7 @@ typedef struct {
 
 typedef enum {
     MATTER_CONTROLLER_CALLBACK_TYPE_AUTHORIZE = 1,
+    MATTER_CONTROLLER_CALLBACK_TYPE_DISCOVER_RMAKER_GROUP,
     MATTER_CONTROLLER_CALLBACK_TYPE_QUERY_MATTER_FABRIC_ID,
     MATTER_CONTROLLER_CALLBACK_TYPE_SETUP_CONTROLLER,
     MATTER_CONTROLLER_CALLBACK_TYPE_UPDATE_CONTROLLER_NOC,
@@ -50,6 +51,7 @@ typedef enum {
 typedef esp_err_t (*matter_controller_callback_t)(matter_controller_handle_t *handle, matter_controller_callback_type_t type);
 
 esp_err_t matter_controller_handle_update();
+esp_err_t matter_controller_sync_node_id();
 
 esp_err_t matter_controller_enable(uint16_t matter_vendor_id, matter_controller_callback_t callback);
 
