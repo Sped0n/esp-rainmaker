@@ -116,7 +116,7 @@ scoop install pipx
 pipx ensurepath
 ```
 
-### 1. Claim the device and Generate the fctry partition
+### 1. Claim the device
 
 Remember to login using `esp-rainmaker-cli` first (`pipx run esp-rainmaker-cli login` or run it without [pipx](https://github.com/pypa/pipx)).
 
