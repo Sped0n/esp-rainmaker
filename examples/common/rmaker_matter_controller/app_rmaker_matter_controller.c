@@ -71,21 +71,19 @@ static esp_err_t matter_controller_setup_controller(matter_controller_handle_t *
     }
     esp_err_t err = ESP_OK;
     if (handle->setup_callback) {
+        uint64_t fabric_id = 0ULL;
+        ESP_RETURN_ON_ERROR(matter_controller_authorize(handle), TAG, "Failed to authorize");
+        ESP_RETURN_ON_ERROR(app_rmaker_api_get_matter_fabric_id(handle->rmaker_group_id, &fabric_id), TAG,
+                            "Failed to get fabric ID");
         if (!handle->is_setup_successfully_before) {
-            uint64_t fabric_id = 0ULL;
             uint8_t ipk_value[ESP_MATTER_IPK_LEN];
             size_t ipk_len = ESP_MATTER_IPK_LEN;
-            ESP_RETURN_ON_ERROR(matter_controller_authorize(handle), TAG, "Failed to authorize");
             ESP_RETURN_ON_ERROR(app_rmaker_api_get_fabric_ipk(handle->rmaker_group_id, ipk_value, ESP_MATTER_IPK_LEN),
                                 TAG, "Failed on fetching IPK");
-            if (handle->is_server_instance) {
-                ESP_RETURN_ON_ERROR(app_rmaker_api_get_matter_fabric_id(handle->rmaker_group_id, &fabric_id), TAG,
-                                    "Failed to get fabric ID");
-            }
             err = handle->setup_callback(ipk_value, ipk_len, fabric_id);
         } else {
             ESP_LOGI(TAG, "Controller has been successfully set up before");
-            err = handle->setup_callback(NULL, 0, 0);
+            err = handle->setup_callback(NULL, 0, fabric_id);
         }
     } else {
         ESP_LOGE(TAG, "Please register a setup callback before calling app_rmaker_matter_controller_enable");

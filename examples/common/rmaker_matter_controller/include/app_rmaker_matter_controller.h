@@ -26,7 +26,7 @@ typedef struct {
     /* This callback is used to set up matter controller. Will be called in app_rmaker_matter_controller_handle_update()
        if not setup yet and authorized successfully.
 
-    1. For controller instance (client-only controller), fabric_id param is not used in this case.
+    1. For controller instance (client-only controller),
        The matter controller client setup related operations MUST be done in this callback. If the controller has not
        been successfully set up before, an IPK with ipk_len will be passed to this callback. Otherwise, NULL ipk and
        ipk_len will be passed.
