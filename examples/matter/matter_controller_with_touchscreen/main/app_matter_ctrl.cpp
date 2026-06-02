@@ -15,6 +15,7 @@
 #include "esp_matter.h"
 #include "esp_matter_controller_cluster_command.h"
 #include "esp_matter_controller_read_command.h"
+#include "esp_matter_controller_subscribe_command.h"
 #include "ui_matter_ctrl.h"
 
 using namespace chip::app::Clusters;
@@ -38,6 +39,7 @@ typedef struct {
 } onoff_target_t;
 
 static esp_err_t send_onoff_read(uint64_t node_id, uint16_t endpoint_id);
+static esp_err_t send_onoff_subscribe(uint64_t node_id, uint16_t endpoint_id);
 
 static void free_device_list_locked(void)
 {
@@ -139,10 +141,10 @@ static void toggle_state_work(intptr_t arg)
 
     uint64_t node_id = target->node_id;
     uint16_t endpoint_id = target->endpoint_id;
-    auto on_success = [node_id, endpoint_id](void *, const chip::app::ConcreteCommandPath &, const chip::app::StatusIB &status,
-                                             chip::TLV::TLVReader *) {
-        if (status.IsSuccess()) {
-            ESP_ERROR_CHECK_WITHOUT_ABORT(send_onoff_read(node_id, endpoint_id));
+    auto on_success = [](void *, const chip::app::ConcreteCommandPath &, const chip::app::StatusIB &status,
+                         chip::TLV::TLVReader *) {
+        if (!status.IsSuccess()) {
+            ESP_LOGW(TAG, "Toggle command returned failure status");
         }
     };
     auto on_error = [](void *, CHIP_ERROR error) {
@@ -162,6 +164,34 @@ static void toggle_state_work(intptr_t arg)
         ESP_ERROR_CHECK_WITHOUT_ABORT(err);
     }
     free(target);
+}
+
+static void subscribe_onoff_state_work(intptr_t arg)
+{
+    onoff_target_t *target = (onoff_target_t *)arg;
+    if (!target) {
+        return;
+    }
+    ESP_ERROR_CHECK_WITHOUT_ABORT(send_onoff_subscribe(target->node_id, target->endpoint_id));
+    free(target);
+}
+
+static void shutdown_onoff_subscriptions_work(intptr_t arg)
+{
+    (void)arg;
+    esp_matter::controller::send_shutdown_all_subscriptions();
+}
+
+static esp_err_t send_onoff_subscribe(uint64_t node_id, uint16_t endpoint_id)
+{
+    esp_matter::controller::subscribe_command *cmd = chip::Platform::New<esp_matter::controller::subscribe_command>(
+        node_id, endpoint_id, OnOff::Id, OnOff::Attributes::OnOff::Id,
+        esp_matter::controller::SUBSCRIBE_ATTRIBUTE, 1, 30, true, on_onoff_attribute_report, nullptr, nullptr, nullptr,
+        true);
+    if (!cmd) {
+        return ESP_ERR_NO_MEM;
+    }
+    return cmd->send_command();
 }
 
 static esp_err_t request_onoff_state(uint64_t node_id, uint16_t endpoint_id)
@@ -200,6 +230,24 @@ static esp_err_t request_toggle_state(uint64_t node_id, uint16_t endpoint_id)
     return ESP_OK;
 }
 
+static esp_err_t subscribe_onoff_state(uint64_t node_id, uint16_t endpoint_id)
+{
+    onoff_target_t *target = (onoff_target_t *)calloc(1, sizeof(onoff_target_t));
+    if (!target) {
+        return ESP_ERR_NO_MEM;
+    }
+    target->node_id = node_id;
+    target->endpoint_id = endpoint_id;
+
+    CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(subscribe_onoff_state_work, (intptr_t)target);
+    if (err != CHIP_NO_ERROR) {
+        free(target);
+        ESP_LOGW(TAG, "Failed to schedule OnOff subscribe: %s", chip::ErrorStr(err));
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
 static void request_online_onoff_states(void)
 {
     matter_device_list_lock();
@@ -227,6 +275,41 @@ static void request_online_onoff_states(void)
 
     for (size_t i = 0; i < count; ++i) {
         ESP_ERROR_CHECK_WITHOUT_ABORT(request_onoff_state(targets[i].node_id, targets[i].endpoint_id));
+    }
+    free(targets);
+}
+
+static void subscribe_online_onoff_states(void)
+{
+    matter_device_list_lock();
+    size_t capacity = device_to_control.online_num;
+    if (capacity == 0) {
+        matter_device_list_unlock();
+        return;
+    }
+    onoff_target_t *targets = (onoff_target_t *)calloc(capacity, sizeof(onoff_target_t));
+    if (!targets) {
+        matter_device_list_unlock();
+        ESP_LOGW(TAG, "Failed to allocate OnOff subscribe targets");
+        return;
+    }
+
+    size_t count = 0;
+    for (node_endpoint_id_list_t *node = device_to_control.dev_list; node && count < capacity; node = node->next) {
+        if (node->is_online && node->device_type != CONTROL_UNKNOWN_DEVICE) {
+            targets[count].node_id = node->node_id;
+            targets[count].endpoint_id = node->endpoint_id;
+            ++count;
+        }
+    }
+    matter_device_list_unlock();
+
+    CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(shutdown_onoff_subscriptions_work);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGW(TAG, "Failed to schedule subscription shutdown: %s", chip::ErrorStr(err));
+    }
+    for (size_t i = 0; i < count; ++i) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(subscribe_onoff_state(targets[i].node_id, targets[i].endpoint_id));
     }
     free(targets);
 }
@@ -319,10 +402,11 @@ extern "C" void matter_ctrl_refresh_device_list(void)
     }
 
     ESP_LOGI(TAG, "Refresh complete: device_num=%u online_num=%u", device_to_control.device_num,
-              device_to_control.online_num);
+             device_to_control.online_num);
 
     ui_matter_config_update_cb(s_is_provisioned ? UI_MATTER_EVT_REFRESH : UI_MATTER_EVT_LOADING);
     request_online_onoff_states();
+    subscribe_online_onoff_states();
 }
 
 extern "C" bool matter_ctrl_can_refresh_device_list(void)
