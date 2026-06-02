@@ -12,7 +12,6 @@
 #include "ui_about_us.h"
 #include "app_matter_ctrl.h"
 
-#define LV_SYMBOL_EXTRA_SYNC "\xef\x80\xA1"
 static bool perform_factory_reset = false;
 static void (*g_about_us_end_cb)(void) = NULL;
 
@@ -123,15 +122,17 @@ void ui_about_us_start(void (*fn)(void))
     lv_obj_align(lab, LV_ALIGN_BOTTOM_LEFT, 0, -10);
 
     lv_obj_t *reset_button = lv_btn_create(page);
-    lv_obj_set_style_bg_color(reset_button, lv_color_white(), LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(reset_button, lv_palette_lighten(LV_PALETTE_RED, 1), LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(reset_button, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(reset_button, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(reset_button, lv_palette_main(LV_PALETTE_RED), LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(reset_button, lv_palette_darken(LV_PALETTE_RED, 1), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(reset_button, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(reset_button, 8, LV_PART_MAIN);
     lv_obj_align(reset_button, LV_ALIGN_TOP_RIGHT, 0, 0);
-    lv_obj_set_size(reset_button, 40, 40);
-    lv_obj_t *reset_label = lv_label_create(page);
-    lv_label_set_text_static(reset_label, LV_SYMBOL_EXTRA_SYNC);
-    lv_obj_align_to(reset_label, reset_button, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_size(reset_button, 64, 28);
+    lv_obj_t *reset_label = lv_label_create(reset_button);
+    lv_label_set_text_static(reset_label, "Reset");
+    lv_obj_set_style_text_color(reset_label, lv_color_white(), LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(reset_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_center(reset_label);
     lv_obj_add_event_cb(reset_button, btn_event_cb, LV_EVENT_CLICKED, NULL);
 
 }

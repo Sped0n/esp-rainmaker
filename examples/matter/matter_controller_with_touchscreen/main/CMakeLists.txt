@@ -9,11 +9,6 @@ set(PRIV_INCLUDE_DIRS_LIST "."
                            "./box"
                            "./box/gui")
 
-if (CONFIG_CUSTOM_COMMISSIONABLE_DATA_PROVIDER)
-    list(APPEND SRC_DIRS_LIST "./dynamic_qrcode")
-    list(APPEND PRIV_INCLUDE_DIRS_LIST "./dynamic_qrcode")
-endif()
-
 idf_component_register(
     SRC_DIRS ${SRC_DIRS_LIST}
     PRIV_INCLUDE_DIRS ${PRIV_INCLUDE_DIRS_LIST}

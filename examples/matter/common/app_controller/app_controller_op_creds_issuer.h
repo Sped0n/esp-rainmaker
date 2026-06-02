@@ -8,9 +8,18 @@
 
 #pragma once
 
-#include <app_priv.h>
 #include <esp_err.h>
+#include <stddef.h>
+#include <stdint.h>
 
-esp_err_t app_matter_endpoint_create();
-esp_err_t app_matter_report_power(bool val);
-esp_err_t app_matter_endpoint_create();
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+esp_err_t app_controller_client_setup(uint8_t *ipk, size_t ipk_len, uint64_t fabric_id);
+void app_controller_register_op_creds_issuer(void);
+esp_err_t app_controller_update_noc(uint64_t fabric_id);
+
+#ifdef __cplusplus
+}
+#endif

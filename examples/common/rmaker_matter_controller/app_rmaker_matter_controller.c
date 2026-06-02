@@ -343,6 +343,11 @@ esp_err_t app_rmaker_matter_controller_handle_update()
     return send_event_to_matter_ctl_task(MATTER_CONTROLLER_EVENT_TYPE_UPDATE_HANDLE);
 }
 
+bool app_rmaker_matter_controller_can_update_device_list()
+{
+    return check_handle_state() && s_matter_controller_handle->is_controller_setup;
+}
+
 esp_err_t app_rmaker_update_matter_device_list()
 {
     return send_event_to_matter_ctl_task(MATTER_CONTROLLER_EVENT_TYPE_UPDATE_DEVICE_LIST);

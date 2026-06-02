@@ -9,10 +9,6 @@
 #include "esp_log.h"
 #include "lvgl.h"
 
-#if CONFIG_CUSTOM_COMMISSIONABLE_DATA_PROVIDER
-#include "dynamic_qrcode.h"
-#endif
-
 static const char *TAG = "ui_matter_ctrl";
 
 static bool IsCommission = false;
@@ -31,6 +27,10 @@ static lv_obj_t *g_page = NULL;
 static lv_obj_t *g_hint_label = NULL;
 static lv_obj_t *QRcode = NULL;
 static void (*g_dev_ctrl_end_cb)(void) = NULL;
+static lv_obj_t *g_qr_text = NULL;
+static lv_obj_t *g_refresh_btn = NULL;
+
+static void set_qr_payload(const char *qrcode_data);
 
 static uint8_t qrcode_width = 108;
 static uint8_t qrcode_align_y = 8;
@@ -96,9 +96,48 @@ static void ui_dev_ctrl_page_return_click_cb(lv_event_t *e)
     lv_obj_del(obj);
     g_page = NULL;
     QRcode = NULL;
+    g_qr_text = NULL;
+    g_refresh_btn = NULL;
     matter_ctrl_lv_obj_clear();
     if (g_dev_ctrl_end_cb) {
         g_dev_ctrl_end_cb();
+    }
+}
+
+static void refresh_click_cb(lv_event_t *e)
+{
+    (void)e;
+    matter_ctrl_request_device_list_update();
+}
+
+static void create_refresh_button(void)
+{
+    bool can_refresh = matter_ctrl_can_refresh_device_list();
+
+    if (!g_refresh_btn) {
+        g_refresh_btn = lv_btn_create(g_page);
+        lv_obj_set_size(g_refresh_btn, btn_return_width, btn_return_width);
+        lv_obj_align(g_refresh_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+        lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style, 0);
+        lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style_pr, LV_STATE_PRESSED);
+        lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style_focus, LV_STATE_FOCUS_KEY);
+        lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style_focus, LV_STATE_FOCUSED);
+        lv_obj_add_event_cb(g_refresh_btn, refresh_click_cb, LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t *label = lv_label_create(g_refresh_btn);
+        lv_label_set_text_static(label, LV_SYMBOL_REFRESH);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+        lv_obj_center(label);
+    }
+
+    if (can_refresh) {
+        lv_obj_clear_state(g_refresh_btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(g_refresh_btn, lv_color_white(), LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(lv_obj_get_child(g_refresh_btn, 0), lv_color_make(158, 158, 158), LV_STATE_DEFAULT);
+    } else {
+        lv_obj_add_state(g_refresh_btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(g_refresh_btn, lv_color_make(230, 230, 230), LV_STATE_DISABLED);
+        lv_obj_set_style_text_color(lv_obj_get_child(g_refresh_btn, 0), lv_color_make(180, 180, 180), LV_STATE_DISABLED);
     }
 }
 
@@ -108,6 +147,7 @@ static void ui_list_device(void)
     uint8_t kind_to_show = 0;
     uint8_t online_no = 0;
     uint8_t offline_no = device_to_control.online_num;
+    create_refresh_button();
     matter_device_list_lock();
     node_endpoint_id_list_t *ptr = device_to_control.dev_list;
     while (ptr) {
@@ -140,7 +180,7 @@ static void ui_list_device(void)
         lv_obj_align(online_label, LV_ALIGN_CENTER, 0, online_align_y);
 
         if (ptr->is_online) {
-            if (ptr->OnOff) {
+            if (ptr->onoff_known && ptr->OnOff) {
                 ESP_LOGI(TAG, "device %llx is on\n", ptr->node_id);
                 lv_img_set_src(img, img_src_list[ptr->device_type].img_on);
             } else {
@@ -172,7 +212,9 @@ static void ui_list_device(void)
             lv_obj_set_style_text_font(g_hint_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
             lv_obj_align(g_hint_label, LV_ALIGN_CENTER, 0, hint_align_y);
         }
-        lv_label_set_text(g_hint_label, "No device list, please refresh");
+        lv_label_set_text(g_hint_label, matter_ctrl_can_refresh_device_list()
+                                      ? "No device list, tap Refresh"
+                                      : "Controller setup not ready yet");
         lv_obj_clear_flag(g_hint_label, LV_OBJ_FLAG_HIDDEN);
     }
     matter_device_list_unlock();
@@ -194,6 +236,12 @@ void ui_matter_config_update_cb(ui_matter_state_t state)
         if (g_hint_label) {
             lv_obj_clear_flag(g_hint_label, LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(g_hint_label, "Scan the QR code on your phone");
+        }
+        break;
+    case UI_MATTER_EVT_PROVISIONING:
+        if (g_hint_label) {
+            lv_obj_clear_flag(g_hint_label, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(g_hint_label, "Waiting for RainMaker provisioning");
         }
         break;
     case UI_MATTER_EVT_START_COMMISSION:
@@ -237,6 +285,8 @@ void clean_screen_with_button(void)
     lv_obj_clean(g_page);
     QRcode = NULL;
     g_hint_label = NULL;
+    g_qr_text = NULL;
+    g_refresh_btn = NULL;
     lv_obj_t *btn_return = lv_btn_create(g_page);
     lv_obj_set_size(btn_return, btn_return_width, btn_return_width);
     lv_obj_add_style(btn_return, &ui_button_styles()->style, 0);
@@ -290,20 +340,42 @@ void ui_matter_ctrl_start(void (*fn)(void))
     lv_obj_align(g_hint_label, LV_ALIGN_CENTER, 0, hint_align_y);
 
     if (!IsCommission) {
-        QRcode = lv_qrcode_create(g_page, qrcode_width, lv_color_black(), lv_color_white());
-        lv_obj_align(QRcode, LV_ALIGN_TOP_MID, 0, qrcode_align_y);
-#ifdef CONFIG_CUSTOM_COMMISSIONABLE_DATA_PROVIDER
-        const char *qrcode_data = DynamicPasscodeCommissionableDataProvider::GetInstance().GetDynamicQRcodeStr();
-#else
-        const char *qrcode_data = "MT:U9VJ0EPJ01ZD6100000";
-#endif
-        ESP_LOGI(TAG, "QR Data: %s", qrcode_data);
-        lv_qrcode_update(QRcode, qrcode_data, strlen(qrcode_data));
-        lv_label_set_text_static(g_hint_label, "Scan the QR code on your phone");
+        const char *qrcode_data = matter_ctrl_get_qr_payload();
+        if (qrcode_data && qrcode_data[0]) {
+            set_qr_payload(qrcode_data);
+            lv_label_set_text_static(g_hint_label, "Scan the QR code on your phone");
+        } else {
+            lv_label_set_text_static(g_hint_label, "Provisioning QR not ready yet");
+        }
     }
     ESP_LOGI(TAG, "Current Free Memory Internal:\t%d\t SPIRAM:%d",
              heap_caps_get_free_size(MALLOC_CAP_8BIT) - heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     ui_matter_config_update_cb(g_matter_state);
+}
+
+static void set_qr_payload(const char *qrcode_data)
+{
+    if (!QRcode) {
+        QRcode = lv_qrcode_create(g_page, qrcode_width, lv_color_black(), lv_color_white());
+        lv_obj_align(QRcode, LV_ALIGN_TOP_MID, 0, qrcode_align_y);
+    }
+
+    if (lv_qrcode_update(QRcode, qrcode_data, strlen(qrcode_data)) == LV_RES_OK) {
+        lv_obj_clear_flag(QRcode, LV_OBJ_FLAG_HIDDEN);
+        if (g_qr_text) {
+            lv_obj_add_flag(g_qr_text, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
+    if (!g_qr_text) {
+        g_qr_text = lv_label_create(g_page);
+        lv_obj_set_width(g_qr_text, 250);
+        lv_label_set_long_mode(g_qr_text, LV_LABEL_LONG_WRAP);
+        lv_obj_align(g_qr_text, LV_ALIGN_TOP_MID, 0, qrcode_align_y + 8);
+    }
+    lv_label_set_text(g_qr_text, qrcode_data);
+    lv_obj_clear_flag(g_qr_text, LV_OBJ_FLAG_HIDDEN);
 }
