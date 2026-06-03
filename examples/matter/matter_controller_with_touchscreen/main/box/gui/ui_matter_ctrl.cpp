@@ -31,6 +31,7 @@ static lv_obj_t *g_qr_text = NULL;
 static lv_obj_t *g_refresh_btn = NULL;
 
 static void set_qr_payload(const char *qrcode_data);
+static void clean_screen_with_button_locked(void);
 
 static uint8_t qrcode_width = 108;
 static uint8_t qrcode_align_y = 8;
@@ -180,7 +181,7 @@ static void ui_list_device(void)
         lv_obj_align(online_label, LV_ALIGN_CENTER, 0, online_align_y);
 
         if (ptr->is_online) {
-            if (ptr->onoff_known && ptr->OnOff) {
+            if (ptr->onoff) {
                 ESP_LOGI(TAG, "device %llx is on\n", ptr->node_id);
                 lv_img_set_src(img, img_src_list[ptr->device_type].img_on);
             } else {
@@ -262,12 +263,7 @@ void ui_matter_config_update_cb(ui_matter_state_t state)
     case UI_MATTER_EVT_COMMISSIONCOMPLETE:
     case UI_MATTER_EVT_REFRESH:
         IsCommission = true;
-        if (QRcode) {
-            lv_obj_add_flag(QRcode, LV_OBJ_FLAG_HIDDEN);
-        }
-        if (g_hint_label) {
-            lv_obj_add_flag(g_hint_label, LV_OBJ_FLAG_HIDDEN);
-        }
+        clean_screen_with_button_locked();
         ui_list_device();
         break;
     default:
@@ -276,12 +272,11 @@ void ui_matter_config_update_cb(ui_matter_state_t state)
     ui_release();
 }
 
-void clean_screen_with_button(void)
+static void clean_screen_with_button_locked(void)
 {
     if (!g_page) {
         return;
     }
-    ui_acquire();
     lv_obj_clean(g_page);
     QRcode = NULL;
     g_hint_label = NULL;
@@ -304,6 +299,12 @@ void clean_screen_with_button(void)
     if (ui_get_btn_op_group()) {
         lv_group_add_obj(ui_get_btn_op_group(), btn_return);
     }
+}
+
+void clean_screen_with_button(void)
+{
+    ui_acquire();
+    clean_screen_with_button_locked();
     ui_release();
 }
 

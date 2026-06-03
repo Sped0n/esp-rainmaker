@@ -19,10 +19,8 @@ typedef enum {
 
 typedef struct node_endpoint_id_list {
     uint64_t node_id;
-    bool OnOff;
-    bool onoff_known;
+    bool onoff;
     bool is_online;
-    bool is_rainmaker_device;
     uint16_t endpoint_id;
     size_t device_type;
     char name[33];
