@@ -4,14 +4,12 @@
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
 
-#include "ui_matter_ctrl.h"
-#include "esp_heap_caps.h"
-#include "esp_log.h"
-#include "lvgl.h"
-
-#if CONFIG_CUSTOM_COMMISSIONABLE_DATA_PROVIDER
-#include "dynamic_qrcode.h"
-#endif
+#include <app_matter_ctrl.h>
+#include <app_matter_device_list.h>
+#include <esp_heap_caps.h>
+#include <esp_log.h>
+#include <lvgl.h>
+#include <ui_matter_ctrl.h>
 
 static const char *TAG = "ui_matter_ctrl";
 
@@ -31,6 +29,11 @@ static lv_obj_t *g_page = NULL;
 static lv_obj_t *g_hint_label = NULL;
 static lv_obj_t *QRcode = NULL;
 static void (*g_dev_ctrl_end_cb)(void) = NULL;
+static lv_obj_t *g_qr_text = NULL;
+static lv_obj_t *g_refresh_btn = NULL;
+
+static void set_qr_payload(const char *qrcode_data);
+static void clean_screen_with_button_locked(void);
 
 static uint8_t qrcode_width = 108;
 static uint8_t qrcode_align_y = 8;
@@ -57,8 +60,6 @@ static const btn_img_src_t img_src_list[] = {
     {.name = "Unknown", .img_on = &icon_air_on, .img_off = &icon_air_off},
 };
 
-extern device_to_control_t device_to_control;
-
 void ui_set_onoff_state(lv_obj_t *g_func_btn, size_t size_type, bool state)
 {
     if (NULL == g_func_btn) {
@@ -78,7 +79,7 @@ void ui_set_onoff_state(lv_obj_t *g_func_btn, size_t size_type, bool state)
 
 static void device_image_click_cb(lv_event_t *e)
 {
-    node_endpoint_id_list_t *ptr = (node_endpoint_id_list_t *)lv_event_get_user_data(e);
+    matter_device_list_node_t *ptr = (matter_device_list_node_t *)lv_event_get_user_data(e);
     if (!ptr) {
         ESP_LOGI(TAG, "NULL ptr");
         return;
@@ -96,9 +97,47 @@ static void ui_dev_ctrl_page_return_click_cb(lv_event_t *e)
     lv_obj_del(obj);
     g_page = NULL;
     QRcode = NULL;
-    matter_ctrl_lv_obj_clear();
+    g_qr_text = NULL;
+    g_refresh_btn = NULL;
     if (g_dev_ctrl_end_cb) {
         g_dev_ctrl_end_cb();
+    }
+}
+
+static void refresh_click_cb(lv_event_t *e)
+{
+    (void)e;
+    matter_device_list_fetch();
+}
+
+static void create_refresh_button(void)
+{
+    bool can_refresh = matter_device_list_is_fetchable();
+
+    if (!g_refresh_btn) {
+        g_refresh_btn = lv_btn_create(g_page);
+        lv_obj_set_size(g_refresh_btn, btn_return_width, btn_return_width);
+        lv_obj_align(g_refresh_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+        lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style, 0);
+        lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style_pr, LV_STATE_PRESSED);
+        lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style_focus, LV_STATE_FOCUS_KEY);
+        lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style_focus, LV_STATE_FOCUSED);
+        lv_obj_add_event_cb(g_refresh_btn, refresh_click_cb, LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t *label = lv_label_create(g_refresh_btn);
+        lv_label_set_text_static(label, LV_SYMBOL_REFRESH);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+        lv_obj_center(label);
+    }
+
+    if (can_refresh) {
+        lv_obj_clear_state(g_refresh_btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(g_refresh_btn, lv_color_white(), LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(lv_obj_get_child(g_refresh_btn, 0), lv_color_make(158, 158, 158), LV_STATE_DEFAULT);
+    } else {
+        lv_obj_add_state(g_refresh_btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(g_refresh_btn, lv_color_make(230, 230, 230), LV_STATE_DISABLED);
+        lv_obj_set_style_text_color(lv_obj_get_child(g_refresh_btn, 0), lv_color_make(180, 180, 180), LV_STATE_DISABLED);
     }
 }
 
@@ -107,16 +146,16 @@ static void ui_list_device(void)
     uint8_t num_of_device[4] = {0, 0, 0, 0};
     uint8_t kind_to_show = 0;
     uint8_t online_no = 0;
-    uint8_t offline_no = device_to_control.online_num;
+    uint8_t offline_no = matter_device_list.online_num;
+    create_refresh_button();
     matter_device_list_lock();
-    node_endpoint_id_list_t *ptr = device_to_control.dev_list;
+    matter_device_list_node_t *ptr = matter_device_list.dev_list;
     while (ptr) {
-        if (ptr->device_type == CONTROL_UNKNOWN_DEVICE) {
+        if (ptr->device_type == matter_device_list_type_unknown) {
             ptr = ptr->next;
             continue;
         }
         lv_obj_t *g_func_btn = lv_btn_create(g_page);
-        ptr->lv_obj = g_func_btn;
         lv_obj_set_size(g_func_btn, control_button_width, control_button_height);
         lv_obj_set_style_bg_color(g_func_btn, lv_color_white(), LV_STATE_DEFAULT);
         lv_obj_set_style_bg_color(g_func_btn, lv_color_white(), LV_STATE_CHECKED);
@@ -140,7 +179,7 @@ static void ui_list_device(void)
         lv_obj_align(online_label, LV_ALIGN_CENTER, 0, online_align_y);
 
         if (ptr->is_online) {
-            if (ptr->OnOff) {
+            if (ptr->onoff) {
                 ESP_LOGI(TAG, "device %llx is on\n", ptr->node_id);
                 lv_img_set_src(img, img_src_list[ptr->device_type].img_on);
             } else {
@@ -172,7 +211,9 @@ static void ui_list_device(void)
             lv_obj_set_style_text_font(g_hint_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
             lv_obj_align(g_hint_label, LV_ALIGN_CENTER, 0, hint_align_y);
         }
-        lv_label_set_text(g_hint_label, "No device list, please refresh");
+        lv_label_set_text(g_hint_label, matter_device_list_is_fetchable()
+                                      ? "No device list, tap Refresh"
+                                      : "Controller setup not ready yet");
         lv_obj_clear_flag(g_hint_label, LV_OBJ_FLAG_HIDDEN);
     }
     matter_device_list_unlock();
@@ -196,6 +237,12 @@ void ui_matter_config_update_cb(ui_matter_state_t state)
             lv_label_set_text(g_hint_label, "Scan the QR code on your phone");
         }
         break;
+    case UI_MATTER_EVT_PROVISIONING:
+        if (g_hint_label) {
+            lv_obj_clear_flag(g_hint_label, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(g_hint_label, "Waiting for RainMaker provisioning");
+        }
+        break;
     case UI_MATTER_EVT_START_COMMISSION:
         if (g_hint_label) {
             lv_obj_clear_flag(g_hint_label, LV_OBJ_FLAG_HIDDEN);
@@ -214,12 +261,7 @@ void ui_matter_config_update_cb(ui_matter_state_t state)
     case UI_MATTER_EVT_COMMISSIONCOMPLETE:
     case UI_MATTER_EVT_REFRESH:
         IsCommission = true;
-        if (QRcode) {
-            lv_obj_add_flag(QRcode, LV_OBJ_FLAG_HIDDEN);
-        }
-        if (g_hint_label) {
-            lv_obj_add_flag(g_hint_label, LV_OBJ_FLAG_HIDDEN);
-        }
+        clean_screen_with_button_locked();
         ui_list_device();
         break;
     default:
@@ -228,15 +270,16 @@ void ui_matter_config_update_cb(ui_matter_state_t state)
     ui_release();
 }
 
-void clean_screen_with_button(void)
+static void clean_screen_with_button_locked(void)
 {
     if (!g_page) {
         return;
     }
-    ui_acquire();
     lv_obj_clean(g_page);
     QRcode = NULL;
     g_hint_label = NULL;
+    g_qr_text = NULL;
+    g_refresh_btn = NULL;
     lv_obj_t *btn_return = lv_btn_create(g_page);
     lv_obj_set_size(btn_return, btn_return_width, btn_return_width);
     lv_obj_add_style(btn_return, &ui_button_styles()->style, 0);
@@ -254,6 +297,12 @@ void clean_screen_with_button(void)
     if (ui_get_btn_op_group()) {
         lv_group_add_obj(ui_get_btn_op_group(), btn_return);
     }
+}
+
+void clean_screen_with_button(void)
+{
+    ui_acquire();
+    clean_screen_with_button_locked();
     ui_release();
 }
 
@@ -290,20 +339,42 @@ void ui_matter_ctrl_start(void (*fn)(void))
     lv_obj_align(g_hint_label, LV_ALIGN_CENTER, 0, hint_align_y);
 
     if (!IsCommission) {
-        QRcode = lv_qrcode_create(g_page, qrcode_width, lv_color_black(), lv_color_white());
-        lv_obj_align(QRcode, LV_ALIGN_TOP_MID, 0, qrcode_align_y);
-#ifdef CONFIG_CUSTOM_COMMISSIONABLE_DATA_PROVIDER
-        const char *qrcode_data = DynamicPasscodeCommissionableDataProvider::GetInstance().GetDynamicQRcodeStr();
-#else
-        const char *qrcode_data = "MT:U9VJ0EPJ01ZD6100000";
-#endif
-        ESP_LOGI(TAG, "QR Data: %s", qrcode_data);
-        lv_qrcode_update(QRcode, qrcode_data, strlen(qrcode_data));
-        lv_label_set_text_static(g_hint_label, "Scan the QR code on your phone");
+        const char *qrcode_data = matter_ctrl_get_qr_payload();
+        if (qrcode_data && qrcode_data[0]) {
+            set_qr_payload(qrcode_data);
+            lv_label_set_text_static(g_hint_label, "Scan the QR code on your phone");
+        } else {
+            lv_label_set_text_static(g_hint_label, "Provisioning QR not ready yet");
+        }
     }
     ESP_LOGI(TAG, "Current Free Memory Internal:\t%d\t SPIRAM:%d",
              heap_caps_get_free_size(MALLOC_CAP_8BIT) - heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     ui_matter_config_update_cb(g_matter_state);
+}
+
+static void set_qr_payload(const char *qrcode_data)
+{
+    if (!QRcode) {
+        QRcode = lv_qrcode_create(g_page, qrcode_width, lv_color_black(), lv_color_white());
+        lv_obj_align(QRcode, LV_ALIGN_TOP_MID, 0, qrcode_align_y);
+    }
+
+    if (lv_qrcode_update(QRcode, qrcode_data, strlen(qrcode_data)) == LV_RES_OK) {
+        lv_obj_clear_flag(QRcode, LV_OBJ_FLAG_HIDDEN);
+        if (g_qr_text) {
+            lv_obj_add_flag(g_qr_text, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
+    if (!g_qr_text) {
+        g_qr_text = lv_label_create(g_page);
+        lv_obj_set_width(g_qr_text, 250);
+        lv_label_set_long_mode(g_qr_text, LV_LABEL_LONG_WRAP);
+        lv_obj_align(g_qr_text, LV_ALIGN_TOP_MID, 0, qrcode_align_y + 8);
+    }
+    lv_label_set_text(g_qr_text, qrcode_data);
+    lv_obj_clear_flag(g_qr_text, LV_OBJ_FLAG_HIDDEN);
 }

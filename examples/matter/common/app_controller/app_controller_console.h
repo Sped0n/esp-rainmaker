@@ -8,9 +8,12 @@
 
 #pragma once
 
-#include <esp_err.h>
-#include <app_priv.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-esp_err_t app_matter_endpoint_create();
-esp_err_t app_matter_report_power(bool val);
-esp_err_t app_matter_endpoint_create();
+void app_controller_register_commands(void);
+
+#ifdef __cplusplus
+}
+#endif

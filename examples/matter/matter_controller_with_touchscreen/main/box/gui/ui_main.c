@@ -108,6 +108,7 @@ lv_obj_t *ui_main_get_status_bar(void)
 
 void ui_main_status_bar_set_wifi(bool is_connected)
 {
+    wifi_connected = is_connected;
     if (g_lab_wifi) {
         lv_label_set_text_static(g_lab_wifi, is_connected ? LV_SYMBOL_WIFI : LV_SYMBOL_EXTRA_WIFI_OFF);
     }

@@ -9,6 +9,7 @@
 #include <app_rmaker_user_api.h>
 #include <esp_err.h>
 #include <esp_rmaker_core.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "app_rmaker_matter_controller_api.h"
@@ -70,6 +71,13 @@ esp_err_t app_rmaker_matter_controller_enable(matter_controller_config_t *config
  * @return error in case of failure
  */
 esp_err_t app_rmaker_matter_controller_handle_update();
+
+/**
+ * @brief Check whether the controller has enough state to update the Matter device list.
+ *
+ * @return true if the base URL, user token, group id, authorization, and controller setup are ready.
+ */
+bool app_rmaker_matter_controller_can_update_device_list();
 
 // TODO: Remove these storage APIs once the esp_matter component includes the commit
 // for setting up the controller with the stored fabric in the esp_matter component.

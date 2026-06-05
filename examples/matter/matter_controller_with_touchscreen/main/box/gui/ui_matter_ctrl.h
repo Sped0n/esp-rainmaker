@@ -6,9 +6,7 @@
 
 #pragma once
 
-#include "app_matter_ctrl.h"
-#include "esp_err.h"
-#include "ui_main.h"
+#include <ui_main.h>
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -17,6 +15,7 @@ extern "C" {
 
 typedef enum {
     UI_MATTER_EVT_LOADING,
+    UI_MATTER_EVT_PROVISIONING,
     UI_MATTER_EVT_START_COMMISSION,
     UI_MATTER_EVT_COMMISSIONCOMPLETE,
     UI_MATTER_EVT_FAILED_COMMISSION,
