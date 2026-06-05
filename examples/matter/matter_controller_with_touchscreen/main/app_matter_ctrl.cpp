@@ -98,7 +98,6 @@ static void refresh_ui_task(void *pvParameters)
 
     while (true) {
         if (ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == true) {
-            clean_screen_with_button();
             matter_ctrl_rebuild_device_list_from_cache();
         }
     }

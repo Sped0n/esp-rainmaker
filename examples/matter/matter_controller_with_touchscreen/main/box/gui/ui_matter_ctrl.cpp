@@ -31,6 +31,9 @@ static lv_obj_t *QRcode = NULL;
 static void (*g_dev_ctrl_end_cb)(void) = NULL;
 static lv_obj_t *g_qr_text = NULL;
 static lv_obj_t *g_refresh_btn = NULL;
+static lv_obj_t *g_refresh_label = NULL;
+static lv_timer_t *g_refresh_cooldown_timer = NULL;
+static bool g_refresh_cooling_down = false;
 
 static void set_qr_payload(const char *qrcode_data);
 static void clean_screen_with_button_locked(void);
@@ -46,6 +49,7 @@ static uint8_t control_button_first_row = 40;
 static int8_t image_align_y = -20;
 static uint8_t name_align_y = 15;
 static uint8_t online_align_y = 35;
+static constexpr uint32_t kRefreshCooldownMs = 3000;
 
 typedef struct {
     const char *name;
@@ -99,21 +103,62 @@ static void ui_dev_ctrl_page_return_click_cb(lv_event_t *e)
     QRcode = NULL;
     g_qr_text = NULL;
     g_refresh_btn = NULL;
+    g_refresh_label = NULL;
     if (g_dev_ctrl_end_cb) {
         g_dev_ctrl_end_cb();
     }
 }
 
+static void update_refresh_button_state(void)
+{
+    if (!g_refresh_btn || !g_refresh_label) {
+        return;
+    }
+
+    if (g_refresh_cooling_down || !matter_device_list_is_fetchable()) {
+        lv_obj_add_state(g_refresh_btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(g_refresh_btn, lv_color_make(230, 230, 230), LV_STATE_DISABLED);
+        lv_obj_set_style_text_color(g_refresh_label, lv_color_make(180, 180, 180), LV_STATE_DISABLED);
+    } else {
+        lv_obj_clear_state(g_refresh_btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(g_refresh_btn, lv_color_white(), LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(g_refresh_label, lv_color_make(158, 158, 158), LV_STATE_DEFAULT);
+    }
+}
+
+static void refresh_cooldown_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    g_refresh_cooldown_timer = NULL;
+    g_refresh_cooling_down = false;
+    update_refresh_button_state();
+}
+
+static void start_refresh_cooldown(void)
+{
+    g_refresh_cooling_down = true;
+    if (g_refresh_cooldown_timer) {
+        lv_timer_reset(g_refresh_cooldown_timer);
+    } else {
+        g_refresh_cooldown_timer = lv_timer_create(refresh_cooldown_timer_cb, kRefreshCooldownMs, NULL);
+        lv_timer_set_repeat_count(g_refresh_cooldown_timer, 1);
+    }
+    update_refresh_button_state();
+}
+
 static void refresh_click_cb(lv_event_t *e)
 {
     (void)e;
+    if (g_refresh_cooling_down) {
+        return;
+    }
+
+    start_refresh_cooldown();
     matter_device_list_fetch();
 }
 
 static void create_refresh_button(void)
 {
-    bool can_refresh = matter_device_list_is_fetchable();
-
     if (!g_refresh_btn) {
         g_refresh_btn = lv_btn_create(g_page);
         lv_obj_set_size(g_refresh_btn, btn_return_width, btn_return_width);
@@ -124,21 +169,12 @@ static void create_refresh_button(void)
         lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style_focus, LV_STATE_FOCUSED);
         lv_obj_add_event_cb(g_refresh_btn, refresh_click_cb, LV_EVENT_CLICKED, NULL);
 
-        lv_obj_t *label = lv_label_create(g_refresh_btn);
-        lv_label_set_text_static(label, LV_SYMBOL_REFRESH);
-        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
-        lv_obj_center(label);
+        g_refresh_label = lv_label_create(g_refresh_btn);
+        lv_label_set_text_static(g_refresh_label, LV_SYMBOL_REFRESH);
+        lv_obj_set_style_text_font(g_refresh_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+        lv_obj_center(g_refresh_label);
     }
-
-    if (can_refresh) {
-        lv_obj_clear_state(g_refresh_btn, LV_STATE_DISABLED);
-        lv_obj_set_style_bg_color(g_refresh_btn, lv_color_white(), LV_STATE_DEFAULT);
-        lv_obj_set_style_text_color(lv_obj_get_child(g_refresh_btn, 0), lv_color_make(158, 158, 158), LV_STATE_DEFAULT);
-    } else {
-        lv_obj_add_state(g_refresh_btn, LV_STATE_DISABLED);
-        lv_obj_set_style_bg_color(g_refresh_btn, lv_color_make(230, 230, 230), LV_STATE_DISABLED);
-        lv_obj_set_style_text_color(lv_obj_get_child(g_refresh_btn, 0), lv_color_make(180, 180, 180), LV_STATE_DISABLED);
-    }
+    update_refresh_button_state();
 }
 
 static void ui_list_device(void)
@@ -280,6 +316,7 @@ static void clean_screen_with_button_locked(void)
     g_hint_label = NULL;
     g_qr_text = NULL;
     g_refresh_btn = NULL;
+    g_refresh_label = NULL;
     lv_obj_t *btn_return = lv_btn_create(g_page);
     lv_obj_set_size(btn_return, btn_return_width, btn_return_width);
     lv_obj_add_style(btn_return, &ui_button_styles()->style, 0);
@@ -297,13 +334,6 @@ static void clean_screen_with_button_locked(void)
     if (ui_get_btn_op_group()) {
         lv_group_add_obj(ui_get_btn_op_group(), btn_return);
     }
-}
-
-void clean_screen_with_button(void)
-{
-    ui_acquire();
-    clean_screen_with_button_locked();
-    ui_release();
 }
 
 void ui_matter_ctrl_start(void (*fn)(void))
