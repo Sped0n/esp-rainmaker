@@ -168,6 +168,7 @@ static void create_refresh_button(void)
         lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style_focus, LV_STATE_FOCUS_KEY);
         lv_obj_add_style(g_refresh_btn, &ui_button_styles()->style_focus, LV_STATE_FOCUSED);
         lv_obj_add_event_cb(g_refresh_btn, refresh_click_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_flag(g_refresh_btn, LV_OBJ_FLAG_FLOATING);
 
         g_refresh_label = lv_label_create(g_refresh_btn);
         lv_label_set_text_static(g_refresh_label, LV_SYMBOL_REFRESH);
