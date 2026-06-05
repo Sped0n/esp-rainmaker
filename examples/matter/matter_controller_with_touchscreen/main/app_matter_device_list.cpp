@@ -12,6 +12,8 @@
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <lib/core/CHIPConfig.h>
+#include <sdkconfig.h>
 
 static const char *TAG = "matter_device_list";
 static SemaphoreHandle_t s_device_list_mutex;
@@ -21,6 +23,13 @@ static constexpr uint32_t kOnOffLightDeviceTypeId = 0x0100;
 static constexpr uint32_t kOnOffLightSwitchDeviceTypeId = 0x0103;
 static constexpr uint32_t kOnOffPluginUnitDeviceTypeId = 0x010A;
 static constexpr uint32_t kOnOffLightDeviceTypeIdV2 = 0x010D;
+
+static constexpr size_t kMatterControllerMaxActiveDevices = CHIP_CONFIG_CONTROLLER_MAX_ACTIVE_DEVICES;
+static constexpr size_t kMatterMaxExchangeContexts = CONFIG_MAX_EXCHANGE_CONTEXTS;
+static constexpr size_t kMatterDeviceListMaxDevices = kMatterControllerMaxActiveDevices < kMatterMaxExchangeContexts
+                                                      ? kMatterControllerMaxActiveDevices
+                                                      : kMatterMaxExchangeContexts;
+static_assert(kMatterDeviceListMaxDevices > 0, "Matter controller device-list limit must be non-zero");
 
 matter_device_list_state_t matter_device_list = {0};
 
@@ -78,15 +87,25 @@ void matter_device_list_rebuild(void)
     matter_device_list.online_num = 0;
 
     matter_device_list_node_t **tail = &matter_device_list.dev_list;
+    size_t skipped_unsupported = 0;
+    size_t skipped_limit = 0;
     for (matter_device_t *dev = dev_list; dev; dev = dev->next) {
         ESP_LOGI(TAG, "Refresh device: node=0x%" PRIx32 "%08" PRIx32 " reachable=%d endpoint_count=%u rainmaker=%d",
                  (uint32_t)(dev->node_id >> 32), (uint32_t)(dev->node_id & 0xFFFFFFFF), dev->reachable,
                  dev->endpoint_count, dev->is_rainmaker_device);
         for (uint8_t i = 0; i < dev->endpoint_count; ++i) {
             size_t mapped_type = map_device_type(dev->endpoints[i].device_type_id);
-            ESP_LOGI(TAG, "  endpoint=%u device_type_id=0x%" PRIx32 " mapped_type=%u name=%s",
+            ESP_LOGI(TAG, "  endpoint=%u device_type_id=0x%" PRIx32 " mapped_type=%zu name=%s",
                      dev->endpoints[i].endpoint_id, dev->endpoints[i].device_type_id, mapped_type,
                      dev->endpoints[i].device_name);
+            if (mapped_type == matter_device_list_type_unknown) {
+                ++skipped_unsupported;
+                continue;
+            }
+            if (matter_device_list.device_num >= kMatterDeviceListMaxDevices) {
+                ++skipped_limit;
+                continue;
+            }
 
             matter_device_list_node_t *entry = (matter_device_list_node_t *)calloc(1, sizeof(matter_device_list_node_t));
             if (!entry) {
@@ -105,12 +124,22 @@ void matter_device_list_rebuild(void)
 
     matter_device_list_unlock();
 
+    if (skipped_unsupported > 0) {
+        ESP_LOGI(TAG, "Skipped %zu unsupported endpoints", skipped_unsupported);
+    }
+    if (skipped_limit > 0) {
+        ESP_LOGW(TAG,
+                 "Skipped %zu endpoints due to controller limit %zu (active_devices=%zu exchange_contexts=%zu)",
+                 skipped_limit, kMatterDeviceListMaxDevices, kMatterControllerMaxActiveDevices,
+                 kMatterMaxExchangeContexts);
+    }
+
     app_rmaker_free_matter_device_list(dev_list);
     if (dev_list) {
         s_empty_list_update_requested = false;
     }
 
-    ESP_LOGI(TAG, "Rebuild complete: device_num=%u online_num=%u", matter_device_list.device_num,
+    ESP_LOGI(TAG, "Rebuild complete: device_num=%zu online_num=%zu", matter_device_list.device_num,
              matter_device_list.online_num);
 }
 
