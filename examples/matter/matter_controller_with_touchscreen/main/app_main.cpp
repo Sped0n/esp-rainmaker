@@ -17,7 +17,6 @@
 #include <app_insights.h>
 #include <app_network.h>
 #include <app_rmaker_matter_controller.h>
-#include <app_rmaker_matter_rmctl.h>
 #include <esp_event.h>
 #include <esp_log.h>
 #include <esp_matter.h>
@@ -153,7 +152,6 @@ extern "C" void app_main()
 
     app_controller_set_device_list_update_cb(matter_ctrl_on_device_list_update);
     ESP_ERROR_CHECK(app_controller_init());
-    ESP_ERROR_CHECK(app_rmaker_matter_rmctl_enable());
 
     box_main();
 

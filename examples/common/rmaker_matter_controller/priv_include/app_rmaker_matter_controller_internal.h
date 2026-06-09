@@ -50,6 +50,7 @@ typedef struct {
     matter_controller_setup_callback_t setup_callback;
     matter_controller_update_noc_callback_t update_noc_callback;
     esp_rmaker_device_t *service;
+    esp_rmaker_param_t *matter_devices_param;
     uint64_t matter_node_id;
 } matter_controller_handle_t;
 
@@ -87,6 +88,10 @@ esp_err_t rmaker_matter_controller_get_nvs(const char *key, uint8_t *val_buf, si
  * @return error in case of failure
  */
 esp_err_t rmaker_matter_controller_set_nvs(const char *key, const uint8_t *val, size_t val_len);
+
+esp_err_t app_rmaker_matter_controller_cmd_resp_enable(void);
+esp_err_t app_rmaker_matter_controller_attr_report_enable(void);
+void app_rmaker_matter_controller_attr_report_on_device_list_update(void);
 
 #ifdef __cplusplus
 }

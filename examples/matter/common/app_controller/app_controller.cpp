@@ -11,7 +11,6 @@
 #include <app_controller_op_creds_issuer.h>
 
 #include <app_rmaker_matter_controller.h>
-#include <app_rmaker_matter_rmctl.h>
 #include <esp_check.h>
 #include <esp_err.h>
 #include <esp_log.h>
@@ -22,6 +21,7 @@
 
 static const char *TAG = "app_controller";
 static app_controller_device_list_update_cb_t s_device_list_update_cb = NULL;
+static esp_rmaker_param_t *s_matter_devices_param = NULL;
 
 extern "C" void app_controller_set_device_list_update_cb(app_controller_device_list_update_cb_t callback)
 {
@@ -36,10 +36,10 @@ extern "C" esp_err_t app_controller_set_device_params(esp_rmaker_device_t *devic
     ESP_RETURN_ON_FALSE(name_param, ESP_ERR_NO_MEM, TAG, "Failed to create name param");
     ESP_RETURN_ON_ERROR(esp_rmaker_device_add_param(device, name_param), TAG, "Failed to add name param");
 
-    esp_rmaker_param_t *matter_devices_param =
-        app_rmaker_matter_controller_matter_devices_param_create("Matter-Devices");
-    ESP_RETURN_ON_FALSE(matter_devices_param, ESP_ERR_NO_MEM, TAG, "Failed to create Matter-Devices param");
-    ESP_RETURN_ON_ERROR(esp_rmaker_device_add_param(device, matter_devices_param), TAG,
+    s_matter_devices_param = esp_rmaker_param_create("Matter-Devices", "esp.param.matter-devices", esp_rmaker_obj("{}"),
+                                                     PROP_FLAG_READ);
+    ESP_RETURN_ON_FALSE(s_matter_devices_param, ESP_ERR_NO_MEM, TAG, "Failed to create Matter-Devices param");
+    ESP_RETURN_ON_ERROR(esp_rmaker_device_add_param(device, s_matter_devices_param), TAG,
                         "Failed to add Matter-Devices param");
 
     return ESP_OK;
@@ -63,6 +63,7 @@ extern "C" esp_err_t app_controller_init(void)
         .setup_callback = app_controller_client_setup,
         .update_noc_callback = app_controller_update_noc,
         .device_list_update_callback = s_device_list_update_cb,
+        .matter_devices_param = s_matter_devices_param,
     };
 
     ESP_RETURN_ON_ERROR(app_rmaker_matter_controller_enable(&controller_config), TAG,
