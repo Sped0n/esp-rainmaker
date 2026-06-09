@@ -1,19 +1,28 @@
+/*
+   This example code is in the Public Domain (or CC0 licensed, at your option.)
+
+   Unless required by applicable law or agreed to in writing, this
+   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+   CONDITIONS OF ANY KIND, either express or implied.
+*/
+
+#include <app_matter_ctrl.h>
 #include <app_matter_device_list.h>
 
-#include <inttypes.h>
-#include <stdlib.h>
-#include <string.h>
-
 #include <app_controller.h>
-#include <app_matter_ctrl.h>
 #include <app_rmaker_matter_controller.h>
 #include <app_rmaker_matter_device_list.h>
 #include <esp_check.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include <lib/core/CHIPConfig.h>
 #include <sdkconfig.h>
+
+#include <lib/core/CHIPConfig.h>
+
+#include <inttypes.h>
+#include <stdlib.h>
+#include <string.h>
 
 static const char *TAG = "matter_device_list";
 static SemaphoreHandle_t s_device_list_mutex;

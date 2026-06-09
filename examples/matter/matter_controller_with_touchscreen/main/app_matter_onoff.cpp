@@ -1,12 +1,17 @@
-#include <app_matter_onoff.h>
+/*
+   This example code is in the Public Domain (or CC0 licensed, at your option.)
 
-#include <stdlib.h>
+   Unless required by applicable law or agreed to in writing, this
+   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+   CONDITIONS OF ANY KIND, either express or implied.
+*/
 
-#include <app/data-model/Decode.h>
-#include <platform/PlatformManager.h>
-#include <app_controller.h>
 #include <app_matter_ctrl.h>
 #include <app_matter_device_list.h>
+#include <app_matter_onoff.h>
+#include <ui_matter_ctrl.h>
+
+#include <app_controller.h>
 #include <esp_check.h>
 #include <esp_log.h>
 #include <esp_matter.h>
@@ -14,7 +19,11 @@
 #include <esp_matter_controller_subscribe_command.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <ui_matter_ctrl.h>
+
+#include <app/data-model/Decode.h>
+#include <platform/PlatformManager.h>
+
+#include <stdlib.h>
 
 using namespace chip::app::Clusters;
 

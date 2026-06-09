@@ -1,20 +1,28 @@
+/*
+   This example code is in the Public Domain (or CC0 licensed, at your option.)
+
+   Unless required by applicable law or agreed to in writing, this
+   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+   CONDITIONS OF ANY KIND, either express or implied.
+*/
+
 #include <app_controller_op_creds_issuer.h>
 
-#include <app/server/Dnssd.h>
 #include <app_rmaker_matter_controller.h>
-#include <credentials/CHIPCert.h>
-#include <crypto/CHIPCryptoPAL.h>
 #include <esp_check.h>
 #include <esp_err.h>
 #include <esp_log.h>
 #include <esp_matter_core.h>
 #include <esp_matter_controller_client.h>
 #include <esp_matter_controller_credentials_issuer.h>
+
+#include <app/server/Dnssd.h>
+#include <credentials/CHIPCert.h>
+#include <crypto/CHIPCryptoPAL.h>
 #include <lib/core/DataModelTypes.h>
 #include <lib/core/NodeId.h>
 #include <lib/support/ScopedBuffer.h>
 #include <lib/support/Span.h>
-#include <stdint.h>
 
 #define TAG "MatterController"
 
@@ -138,7 +146,7 @@ esp_err_t app_controller_op_creds_issuer::generate_controller_noc_chain(chip::No
     size_t noc_len = noc.size();
 
     if (app_rmaker_matter_controller_get_stored_keypair_and_controller_noc(
-            noc.data(), &noc_len, serialized_keypair.Bytes(), &serialized_keypair_len) == ESP_OK) {
+                noc.data(), &noc_len, serialized_keypair.Bytes(), &serialized_keypair_len) == ESP_OK) {
         serialized_keypair.SetLength(serialized_keypair_len);
         ESP_RETURN_ON_FALSE(keypair.Deserialize(serialized_keypair) == CHIP_NO_ERROR, ESP_FAIL, TAG,
                             "Failed on deserializing keypair");

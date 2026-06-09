@@ -7,12 +7,14 @@
 */
 
 #include <esp_log.h>
+#include <sdkconfig.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include <device.h>
+#include <app_end_device.h>
 #include <button_gpio.h>
 #include <esp_matter.h>
+#include <iot_button.h>
 #include <led_driver.h>
 #include <esp_rmaker_core.h>
 #include <esp_rmaker_standard_params.h>
@@ -45,7 +47,10 @@ esp_err_t app_driver_light_set_defaults()
 app_driver_handle_t app_driver_light_init()
 {
     /* Initialize led */
-    led_driver_config_t config = led_driver_get_config();
+    led_driver_config_t config = {
+        .gpio = CONFIG_APP_SWITCH_LED_GPIO,
+        .channel = 0,
+    };
     led_driver_handle_t handle = led_driver_init(&config);
     return (app_driver_handle_t)handle;
 }
@@ -55,7 +60,7 @@ app_driver_handle_t app_driver_button_init(void *user_data)
     /* Initialize button */
     button_handle_t handle = NULL;
     const button_config_t btn_cfg = {0};
-    const button_gpio_config_t btn_gpio_cfg = button_driver_get_config();
+    const button_gpio_config_t btn_gpio_cfg = app_end_device_button_driver_get_config();
 
     if (iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &handle) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create button device");

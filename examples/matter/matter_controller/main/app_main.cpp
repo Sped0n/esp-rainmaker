@@ -12,6 +12,7 @@
 #include <app_insights.h>
 #include <app_network.h>
 #include <app_rmaker_matter_controller.h>
+#include <app_rmaker_matter_rmctl.h>
 #include <esp_check.h>
 #include <esp_event.h>
 #include <esp_log.h>
@@ -22,7 +23,6 @@
 #include <esp_rmaker_ota.h>
 #include <esp_rmaker_scenes.h>
 #include <esp_rmaker_schedule.h>
-#include <esp_rmaker_standard_params.h>
 #include <esp_rmaker_standard_services.h>
 #include <nvs_flash.h>
 
@@ -96,8 +96,8 @@ extern "C" void app_main()
     esp_rmaker_system_service_enable(&system_serv_config);
 
     esp_rmaker_device_t *device = esp_rmaker_device_create("MatterController", "matter-controller", NULL);
-    esp_rmaker_device_add_param(device, esp_rmaker_name_param_create(ESP_RMAKER_DEF_NAME_PARAM, "MatterController"));
-    esp_rmaker_node_add_device(node, device);
+    ESP_ERROR_CHECK(app_controller_set_device_params(device));
+    ESP_ERROR_CHECK(esp_rmaker_node_add_device(node, device));
 
     esp_rmaker_ota_enable_default();
     esp_rmaker_timezone_service_enable();
@@ -114,8 +114,9 @@ extern "C" void app_main()
     ESP_ERROR_CHECK(esp_rmaker_thread_br_enable(&thread_cfg));
 #endif
 
-    app_controller_set_device_list_update_callback(on_device_list_update);
+    app_controller_set_device_list_update_cb(on_device_list_update);
     ESP_ERROR_CHECK(app_controller_init());
+    ESP_ERROR_CHECK(app_rmaker_matter_rmctl_enable());
 
     esp_rmaker_auth_service_enable();
     esp_rmaker_start();

@@ -6,18 +6,18 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 
-
-#include <string.h>
-
 #include <app_matter_ctrl.h>
 #include <app_matter_device_list.h>
 #include <app_matter_onoff.h>
+#include <ui_matter_ctrl.h>
+
 #include <esp_check.h>
 #include <esp_log.h>
 #include <esp_matter.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <ui_matter_ctrl.h>
+
+#include <string.h>
 
 static const char *TAG = "app_matter_ctrl";
 static char s_qr_payload[160];

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <esp_err.h>
+#include <esp_rmaker_core.h>
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -17,8 +18,9 @@ extern "C" {
 
 typedef void (*app_controller_device_list_update_cb_t)(esp_err_t err);
 
-void app_controller_set_device_list_update_callback(app_controller_device_list_update_cb_t callback);
+void app_controller_set_device_list_update_cb(app_controller_device_list_update_cb_t callback);
 
+esp_err_t app_controller_set_device_params(esp_rmaker_device_t *device);
 esp_err_t app_controller_init(void);
 bool app_controller_is_ready(void);
 

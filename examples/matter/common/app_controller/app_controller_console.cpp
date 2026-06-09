@@ -7,6 +7,7 @@
 */
 
 #include <app_controller_console.h>
+
 #include <app_rmaker_matter_controller.h>
 #include <esp_console.h>
 #include <esp_err.h>

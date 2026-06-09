@@ -1,0 +1,11 @@
+menu "RainMaker Matter End Device"
+
+config APP_END_DEVICE_BOARD_BUTTON_GPIO
+    int "Boot Button GPIO"
+    default 28 if IDF_TARGET_ESP32C5
+    default 9 if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C6 || IDF_TARGET_ESP32C2 || IDF_TARGET_ESP32H2
+    default 0
+    help
+        GPIO number on which the "Boot" button is connected.
+
+endmenu

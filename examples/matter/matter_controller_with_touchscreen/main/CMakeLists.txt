@@ -33,6 +33,7 @@ set(PRIV_INCLUDE_DIRS_LIST "."
 idf_component_register(
     SRCS ${SRCS_LIST}
     PRIV_INCLUDE_DIRS ${PRIV_INCLUDE_DIRS_LIST}
+    REQUIRES app_controller esp_event freertos nvs_flash
     LDFRAGMENTS "${ldfragments}")
 
 target_compile_options(${COMPONENT_LIB} PRIVATE "-Wno-format")

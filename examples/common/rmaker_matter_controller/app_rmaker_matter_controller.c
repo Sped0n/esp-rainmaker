@@ -17,6 +17,7 @@
 #include "app_rmaker_matter_controller.h"
 #include "app_rmaker_matter_controller_api.h"
 #include "app_rmaker_matter_controller_internal.h"
+#include "app_rmaker_matter_rmctl_internal.h"
 #include "app_rmaker_matter_controller_service.h"
 #include "app_rmaker_user_api.h"
 
@@ -369,6 +370,9 @@ static esp_err_t update_device_list()
 exit:
     if (s_matter_controller_handle->dev_list_update_cb) {
         s_matter_controller_handle->dev_list_update_cb(ret);
+    }
+    if (ret == ESP_OK) {
+        app_rmaker_matter_controller_attr_report_on_device_list_update();
     }
     return ret;
 }

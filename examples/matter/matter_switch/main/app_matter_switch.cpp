@@ -21,7 +21,7 @@
 #include <esp_matter_client.h>
 #include <esp_matter.h>
 #include <lib/core/Optional.h>
-#include <app_matter.h>
+#include <app_end_device.h>
 #include <app_priv.h>
 
 

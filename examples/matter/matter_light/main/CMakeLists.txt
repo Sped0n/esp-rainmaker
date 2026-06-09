@@ -1,6 +1,7 @@
-set(PRIV_REQUIRES_LIST device app_matter)
-set(SRCS ./app_main.cpp ./app_matter_light.cpp ./app_driver.cpp)
+set(PRIV_REQUIRES_LIST app_end_device)
+set(SRCS ./app_main.cpp ./app_matter_light.cpp ./app_driver.cpp ./led_driver_rgb.c)
 set(PRIV_INCLUDE_DIRS ./ )
+list(APPEND PRIV_REQUIRES_LIST espressif__led_strip)
 
 if (NOT CONFIG_EXAMPLE_USE_RAINMAKER_FABRIC)
     list(APPEND SRCS "network_prov_scheme/protocomm_matter_ble.cpp"
@@ -11,8 +12,6 @@ if (NOT CONFIG_EXAMPLE_USE_RAINMAKER_FABRIC)
     list(APPEND PRIV_INCLUDE_DIRS "network_prov_scheme/" "matter_cwm/")
     list(APPEND PRIV_REQUIRES_LIST network_provisioning)
 endif()
-
-list(APPEND PRIV_INCLUDE_DIRS "$ENV{ESP_MATTER_PATH}/examples/common")
 
 if (CONFIG_CUSTOM_COMMISSIONABLE_DATA_PROVIDER)
     list(APPEND SRCS "matter_cwm/dynamic_commissionable_data_provider.cpp")

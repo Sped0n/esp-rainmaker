@@ -7,30 +7,38 @@
 */
 
 #include <esp_log.h>
-#include<esp_matter.h>
+#include <esp_matter.h>
 #include <esp_matter_rainmaker.h>
 #include <esp_matter_console.h>
+#include <sdkconfig.h>
+
+#include <app_end_device.h>
 
 using namespace esp_matter;
 
-static const char *TAG = "app_matter";
+static const char *TAG = "app_end_device";
 
-esp_err_t app_matter_init(attribute::callback_t app_attribute_update_cb, identification::callback_t app_identification_cb)
+button_gpio_config_t app_end_device_button_driver_get_config(void)
 {
-    /* Create a Matter node */
+    button_gpio_config_t config = {
+        .gpio_num = CONFIG_APP_END_DEVICE_BOARD_BUTTON_GPIO,
+        .active_level = 0,
+    };
+    return config;
+}
+
+esp_err_t app_end_device_init(attribute::callback_t app_attribute_update_cb, identification::callback_t app_identification_cb)
+{
     node::config_t node_config;
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
-
-    /* The node and endpoint handles can be used to create/add other endpoints and clusters. */
     if (!node) {
         ESP_LOGE(TAG, "Matter node creation failed");
         return ESP_FAIL;
     }
-
     return ESP_OK;
 }
 
-esp_err_t app_matter_start(event_callback_t app_event_cb)
+esp_err_t app_end_device_start(event_callback_t app_event_cb)
 {
     esp_err_t err = esp_matter::start(app_event_cb);
     if (err != ESP_OK) {
@@ -39,19 +47,17 @@ esp_err_t app_matter_start(event_callback_t app_event_cb)
     return err;
 }
 
-esp_err_t app_matter_rmaker_init()
+esp_err_t app_end_device_rmaker_init(void)
 {
-    /* Add custom rainmaker cluster */
     return rainmaker::init();
 }
 
-esp_err_t app_matter_rmaker_start()
+esp_err_t app_end_device_rmaker_start(void)
 {
-    /* Other initializations for custom rainmaker cluster */
     return rainmaker::start();
 }
 
-void app_matter_enable_matter_console()
+void app_end_device_enable_matter_console(void)
 {
 #if CONFIG_ENABLE_CHIP_SHELL
     esp_matter::console::diagnostics_register_commands();
