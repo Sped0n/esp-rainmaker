@@ -46,9 +46,6 @@ typedef struct {
     /* When device list is updated through app_rmaker_update_matter_device_list(), this callback will be called to
        notify the application. Can be NULL if not required.*/
     device_list_update_callback_t device_list_update_callback;
-
-    /* Matter-Devices RainMaker parameter owned by the application Matter controller device. */
-    esp_rmaker_param_t *matter_devices_param;
 } matter_controller_config_t;
 
 /**

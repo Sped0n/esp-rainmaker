@@ -6,6 +6,26 @@ menu "ESP Rainmaker Controller"
         help
             Set the stack size of ESP Rainmaker Matter Controller task.
 
+    config RAINMAKER_MATTER_CONTROLLER_ATTR_REPORT_TASK_STACK
+        int "ESP Rainmaker Matter Controller Attribute Report Task Stack Size"
+        default 8192
+        help
+            Set the stack size of ESP Rainmaker Matter Controller attribute report task.
+
+    config RAINMAKER_MATTER_CONTROLLER_ATTR_QUEUE_SIZE
+        int "ESP Rainmaker Matter Controller Attribute Report Queue Size"
+        default 32
+        help
+            Set the attribute report queue depth. Larger values tolerate bigger bursts of subscription reports
+            but consume more heap because each queued item carries the serialized attribute value.
+
+    config RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL
+        bool "Allocate ESP Rainmaker Matter Controller buffers in external memory"
+        depends on SPIRAM && (SPIRAM_USE_CAPS_ALLOC || SPIRAM_USE_MALLOC) && FREERTOS_SUPPORT_STATIC_ALLOCATION
+        default y
+        help
+            Allocate buffers in external memory when available. This saves internal heap.
+
     config RAINMAKER_MATTER_CONTROLLER_MAX_ENDPOINT_COUNT_PER_DEVICE
         int "ESP Rainmaker Matter Controller Max Endpoint Count Per Device"
         default 4

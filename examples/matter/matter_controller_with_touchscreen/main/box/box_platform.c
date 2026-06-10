@@ -62,6 +62,7 @@ esp_err_t box_platform_init(void)
 
     if (strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_SPI) == 0 ||
             strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_PARLIO) == 0) {
+        display_cfg.trans_size = lcd_cfg->lcd_width * 10;
         s_display = lvgl_port_add_disp(&display_cfg);
     }
 #if CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUB_DSI_SUPPORT

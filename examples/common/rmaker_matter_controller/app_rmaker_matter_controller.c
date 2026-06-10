@@ -21,6 +21,10 @@
 #include "app_rmaker_matter_attr_json.h"
 #include "app_rmaker_user_api.h"
 
+#if !CONFIG_RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL
+#warning "RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL is disabled; internal heap exhaustion may occur. Enabling PSRAM and external memory allocation is strongly recommended."
+#endif
+
 #define TAG "rmaker_matter_controller"
 
 static matter_controller_handle_t *s_matter_controller_handle = NULL;
@@ -533,7 +537,6 @@ esp_err_t app_rmaker_matter_controller_enable(matter_controller_config_t *config
     s_matter_controller_handle->setup_callback = config->setup_callback;
     s_matter_controller_handle->update_noc_callback = config->update_noc_callback;
     s_matter_controller_handle->dev_list_update_cb = config->device_list_update_callback;
-    s_matter_controller_handle->matter_devices_param = config->matter_devices_param;
 #ifdef CONFIG_ESP_MATTER_ENABLE_MATTER_SERVER
     s_matter_controller_handle->is_server_instance = true;
 #endif
@@ -561,8 +564,10 @@ esp_err_t app_rmaker_matter_controller_enable(matter_controller_config_t *config
     ESP_GOTO_ON_FALSE(s_matter_controller_handle->dev_list_mutex, ESP_FAIL, exit, TAG,
                       "Failed to create device list mutex");
 
+    s_matter_controller_handle->matter_devices_param = esp_rmaker_device_get_param_by_type(
+        s_matter_controller_handle->service, ESP_RMAKER_PARAM_MATTER_DEVICES);
     ESP_GOTO_ON_FALSE(s_matter_controller_handle->matter_devices_param, ESP_ERR_INVALID_STATE, exit, TAG,
-                      "Matter-Devices param not created");
+                      "MTDevices param not created");
     app_rmaker_matter_attr_json_set_param(s_matter_controller_handle->matter_devices_param);
     ESP_GOTO_ON_ERROR(app_rmaker_matter_controller_cmd_resp_enable(), exit, TAG,
                       "Failed to enable command response");

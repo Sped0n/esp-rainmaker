@@ -9,10 +9,16 @@
 #include <cJSON.h>
 #include <esp_check.h>
 #include <esp_err.h>
+#if CONFIG_RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL
+#include <esp_heap_caps.h>
+#endif
 #include <esp_log.h>
 #include <esp_rmaker_core.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
+#if CONFIG_RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL
+#include <freertos/idf_additions.h>
+#endif
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
@@ -41,9 +47,7 @@ using namespace esp_matter::controller;
 #define MATTER_ATTR_FILTER_CLUSTER_1D      0x1D
 
 #define MATTER_ATTR_VALUE_MAX_LEN         384
-#define MATTER_ATTR_QUEUE_SIZE            32
 #define MATTER_ATTR_MAX_REMOVED_PER_UPDATE 32
-#define MATTER_ATTR_TASK_STACK            8192
 #define MATTER_ATTR_TASK_PRIO             5
 
 typedef enum {
@@ -132,7 +136,13 @@ static void free_node_state(node_state_t *ns)
 
 static node_state_t *create_node_state(uint64_t node_id, const char *rainmaker_node_id)
 {
+#if CONFIG_RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL
+    node_state_t *ns = (node_state_t *)heap_caps_calloc_prefer(1, sizeof(node_state_t), 2,
+                                                               MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM,
+                                                               MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL);
+#else
     node_state_t *ns = (node_state_t *)calloc(1, sizeof(node_state_t));
+#endif
     if (!ns) {
         return NULL;
     }
@@ -486,16 +496,27 @@ esp_err_t app_rmaker_matter_controller_attr_report_enable(void)
     }
     s_state_mutex = xSemaphoreCreateMutex();
     ESP_RETURN_ON_FALSE(s_state_mutex, ESP_ERR_NO_MEM, TAG, "Failed to create state mutex");
-    s_attr_report_queue = xQueueCreate(MATTER_ATTR_QUEUE_SIZE, MATTER_ATTR_QUEUE_ITEM_SIZE);
+#if CONFIG_RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL
+    s_attr_report_queue = xQueueCreateWithCaps(CONFIG_RAINMAKER_MATTER_CONTROLLER_ATTR_QUEUE_SIZE,
+                                               MATTER_ATTR_QUEUE_ITEM_SIZE, MALLOC_CAP_SPIRAM);
+#else
+    s_attr_report_queue = xQueueCreate(CONFIG_RAINMAKER_MATTER_CONTROLLER_ATTR_QUEUE_SIZE,
+                                       MATTER_ATTR_QUEUE_ITEM_SIZE);
+#endif
     if (!s_attr_report_queue) {
         vSemaphoreDelete(s_state_mutex);
         s_state_mutex = NULL;
         return ESP_ERR_NO_MEM;
     }
-    BaseType_t created = xTaskCreate(attr_report_task, "matter_attr_rpt", MATTER_ATTR_TASK_STACK, NULL,
+    BaseType_t created = xTaskCreate(attr_report_task, "matter_attr_rpt",
+                                     CONFIG_RAINMAKER_MATTER_CONTROLLER_ATTR_REPORT_TASK_STACK, NULL,
                                      MATTER_ATTR_TASK_PRIO, &s_attr_report_task);
     if (created != pdPASS) {
+#if CONFIG_RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL
+        vQueueDeleteWithCaps(s_attr_report_queue);
+#else
         vQueueDelete(s_attr_report_queue);
+#endif
         s_attr_report_queue = NULL;
         vSemaphoreDelete(s_state_mutex);
         s_state_mutex = NULL;

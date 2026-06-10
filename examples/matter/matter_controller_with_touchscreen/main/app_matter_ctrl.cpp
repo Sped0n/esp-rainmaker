@@ -12,9 +12,11 @@
 #include <ui_matter_ctrl.h>
 
 #include <esp_check.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_matter.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/idf_additions.h>
 #include <freertos/task.h>
 
 #include <string.h>
@@ -105,8 +107,8 @@ static void refresh_ui_task(void *pvParameters)
 
 esp_err_t matter_ctrl_refresh_ui_init(void)
 {
-    BaseType_t ret = xTaskCreatePinnedToCore(refresh_ui_task, "refresh_ui", 4096, NULL, tskIDLE_PRIORITY,
-                                             &s_refresh_ui_task_handle, 1);
+    BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(refresh_ui_task, "refresh_ui", 4096, NULL, tskIDLE_PRIORITY,
+                                                     &s_refresh_ui_task_handle, 1, MALLOC_CAP_SPIRAM);
     ESP_RETURN_ON_FALSE(ret == pdPASS, ESP_FAIL, TAG, "Failed to create refresh UI task");
     return ESP_OK;
 }
