@@ -3,7 +3,7 @@ dependencies:
   ## Required IDF version
   idf: ">=5.4.3,!=5.5.0,!=5.5.1"
   espressif/esp_board_manager:
-    version: "0.5.8"
+    version: "0.5.14"
   espressif/esp_lvgl_port: "*"
   espressif/esp_rainmaker:
     version: ">=1.0"
