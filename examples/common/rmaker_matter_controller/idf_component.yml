@@ -5,6 +5,6 @@ repository: https://github.com/espressif/esp-rainmaker.git
 
 dependencies:
   espressif/cjson: "1.7.19~2"
+  espressif/esp_matter: "~1.5.0"
   espressif/esp_rainmaker: "^1.0.0"
-  dejinchen/esp_matter: "^1.5.0~7"
   espressif/rmaker_user_api: "^1.0.0"

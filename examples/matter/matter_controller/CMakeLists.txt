@@ -12,10 +12,6 @@ endif(DEFINED ENV{RMAKER_PATH})
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 set(EXTRA_COMPONENT_DIRS
-    "${RMAKER_PATH}/components"
-    "${RMAKER_PATH}/examples/common/rmaker_app_network"
-    "${RMAKER_PATH}/examples/common/rmaker_matter_controller"
-    "${RMAKER_PATH}/examples/common/rmaker_user_api"
     "${RMAKER_PATH}/examples/matter/common/app_controller"
     ${extra_components_dirs_append})
 

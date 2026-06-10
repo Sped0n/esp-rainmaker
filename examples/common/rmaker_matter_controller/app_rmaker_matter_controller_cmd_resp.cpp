@@ -342,8 +342,6 @@ esp_err_t invoke_cluster_command(uint64_t destination_id, uint16_t endpoint_id, 
             }
             err = ESP_ERR_TIMEOUT;
         }
-    } else {
-        chip::Platform::Delete(cluster_command);
     }
     return err;
 }
@@ -517,7 +515,6 @@ esp_err_t read_attr_or_event_command(uint64_t node_id,
             cJSON_AddStringToObject(s_resp_root, "status", "failure");
             cJSON_AddStringToObject(s_resp_root, "reason", "send_command failed");
         }
-        chip::Platform::Delete(cmd);
     } else {
         EventBits_t bits = xEventGroupWaitBits(s_matter_controller_event_group, READ_HANDLED_EVENT, true, true,
                                                MATTER_CMD_TIMEOUT_TICKS);

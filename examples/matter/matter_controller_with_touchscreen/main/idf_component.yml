@@ -1,6 +1,5 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  dejinchen/esp_matter: "^1.5.0~7"
   ## Required IDF version
   idf: ">=5.4.3,!=5.5.0,!=5.5.1"
   espressif/esp_board_manager:
@@ -9,6 +8,7 @@ dependencies:
   espressif/esp_rainmaker:
     version: ">=1.0"
     override_path: "../../../../components/esp_rainmaker/"
+  espressif/esp_matter: "~1.5.0"
   espressif/network_provisioning: "^1.2.4"
   espressif/qrcode: "^0.1.0"
   espressif/rmaker_app_insights:
