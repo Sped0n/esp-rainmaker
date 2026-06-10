@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-void matter_factory_reset(void);
+void factory_reset(void);
 void matter_ctrl_change_state(intptr_t arg);
 void matter_ctrl_on_device_list_update(esp_err_t err);
 esp_err_t matter_ctrl_refresh_ui_init(void);

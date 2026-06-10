@@ -32,7 +32,7 @@ static void ui_about_us_page_return_click_cb(lv_event_t *e)
 static void timer_cb(struct _lv_timer_t *timer)
 {
     (void) timer;
-    matter_factory_reset();
+    factory_reset();
 }
 
 static void msgbox_event_cb(lv_event_t *e)

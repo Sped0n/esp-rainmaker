@@ -26,6 +26,8 @@ static char s_qr_payload[160];
 static bool s_is_provisioned;
 static TaskHandle_t s_refresh_ui_task_handle;
 
+extern "C" esp_err_t esp_rmaker_factory_reset(int seconds, int reboot_seconds);
+
 static void matter_ctrl_rebuild_device_list_from_cache(void)
 {
     if (matter_ctrl_is_provisioned()) {
@@ -37,8 +39,9 @@ static void matter_ctrl_rebuild_device_list_from_cache(void)
     matter_onoff_subscribe_all();
 }
 
-void matter_factory_reset(void)
+void factory_reset(void)
 {
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_rmaker_factory_reset(0, 5));
     esp_matter::factory_reset();
 }
 
