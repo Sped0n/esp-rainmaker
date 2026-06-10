@@ -14,6 +14,8 @@
 
 #define TAG "rmaker_matter_attr_json"
 
+#define MATTER_DEVICES_SCHEMA_REVISION 0U
+
 static esp_rmaker_param_t *s_attributes_param = NULL;
 static uint32_t s_last_report_hash = 0;
 static bool s_have_last_report_hash = false;
@@ -295,6 +297,11 @@ void app_rmaker_matter_attr_json_publish_matter_devices_delta(cJSON *matter_devi
         return;
     }
     if (!matter_devices_obj) {
+        return;
+    }
+    cJSON_DeleteItemFromObject(matter_devices_obj, "revision");
+    if (!cJSON_AddNumberToObject(matter_devices_obj, "revision", MATTER_DEVICES_SCHEMA_REVISION)) {
+        cJSON_Delete(matter_devices_obj);
         return;
     }
 
