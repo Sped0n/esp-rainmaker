@@ -15,9 +15,12 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_matter.h>
+#include <esp_system.h>
+#include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/idf_additions.h>
 #include <freertos/task.h>
+#include <nvs_flash.h>
 
 #include <string.h>
 
@@ -25,8 +28,6 @@ static const char *TAG = "app_matter_ctrl";
 static char s_qr_payload[160];
 static bool s_is_provisioned;
 static TaskHandle_t s_refresh_ui_task_handle;
-
-extern "C" esp_err_t esp_rmaker_factory_reset(int seconds, int reboot_seconds);
 
 static void matter_ctrl_rebuild_device_list_from_cache(void)
 {
@@ -41,8 +42,10 @@ static void matter_ctrl_rebuild_device_list_from_cache(void)
 
 void factory_reset(void)
 {
-    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_rmaker_factory_reset(0, 5));
-    esp_matter::factory_reset();
+    esp_wifi_restore();
+    nvs_flash_deinit();
+    nvs_flash_erase();
+    esp_restart();
 }
 
 void matter_ctrl_change_state(intptr_t arg)
