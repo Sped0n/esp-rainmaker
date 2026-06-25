@@ -15,18 +15,20 @@ extern "C" {
 #endif
 
 #define ESP_MATTER_DEVICE_MAX_ENDPOINT CONFIG_RAINMAKER_MATTER_CONTROLLER_MAX_ENDPOINT_COUNT_PER_DEVICE
+#define ESP_MATTER_DEVICE_MAX_DEVICE_TYPE CONFIG_RAINMAKER_MATTER_CONTROLLER_MAX_DEVICE_TYPE_COUNT_PER_ENDPOINT
 #define ESP_MATTER_DEVICE_NAME_MAX_LEN 32
 #define ESP_RAINMAKER_NODE_ID_MAX_LEN 36
 #define ESP_MATTER_IPK_LEN 16
 
 typedef struct endpoint_entry {
     uint16_t endpoint_id;
-    uint32_t device_type_id;
-    char device_name[ESP_MATTER_DEVICE_NAME_MAX_LEN];
+    uint8_t device_type_count;
+    uint32_t device_type_list[ESP_MATTER_DEVICE_MAX_DEVICE_TYPE];
 } endpoint_entry_t;
 
 typedef struct matter_device {
     uint64_t node_id;
+    char device_name[ESP_MATTER_DEVICE_NAME_MAX_LEN];
     char rainmaker_node_id[ESP_RAINMAKER_NODE_ID_MAX_LEN];
     bool reachable;
     bool is_rainmaker_device;

@@ -389,12 +389,16 @@ void app_rmaker_print_matter_device_list(matter_device_t *dev_list)
         if (dev_list->is_metadata_fetched) {
             ESP_LOGI(TAG, "    is_rainmaker_device: %s,", dev_list->is_rainmaker_device ? "true" : "false");
             ESP_LOGI(TAG, "    is_online: %s,", dev_list->reachable ? "true" : "false");
+            ESP_LOGI(TAG, "    device_name: %s,", dev_list->device_name);
             ESP_LOGI(TAG, "    endpoints : [");
             for (size_t i = 0; i < dev_list->endpoint_count; ++i) {
                 ESP_LOGI(TAG, "        {");
                 ESP_LOGI(TAG, "           endpoint_id: %d,", dev_list->endpoints[i].endpoint_id);
-                ESP_LOGI(TAG, "           device_type_id: 0x%" PRIx32 ",", dev_list->endpoints[i].device_type_id);
-                ESP_LOGI(TAG, "           device_name: %s,", dev_list->endpoints[i].device_name);
+                ESP_LOGI(TAG, "           device_type_list: [");
+                for (size_t j = 0; j < dev_list->endpoints[i].device_type_count; ++j) {
+                    ESP_LOGI(TAG, "               0x%" PRIx32 ",", dev_list->endpoints[i].device_type_list[j]);
+                }
+                ESP_LOGI(TAG, "           ]");
                 ESP_LOGI(TAG, "        },");
             }
             ESP_LOGI(TAG, "    ]");

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.0
+
+### Features
+- Add support for device_type_list on every endpoint
+
 ## 1.0.1 Jun 5
 
 ### Bug fix

@@ -633,6 +633,72 @@ static esp_err_t fetch_matter_node_list(const char *group_id, matter_device_t **
     return ESP_OK;
 }
 
+/**
+ * @brief Parse device type list from cJSON node (number or array)
+ */
+static bool parse_device_type_cjson(cJSON *device_type, endpoint_entry_t *entry)
+{
+    if (!entry || !device_type) {
+        return false;
+    }
+
+    entry->device_type_count = 0;
+    if (cJSON_IsNumber(device_type)) {
+        entry->device_type_list[0] = (uint32_t)device_type->valueint;
+        entry->device_type_count = 1;
+        return true;
+    }
+    if (!cJSON_IsArray(device_type)) {
+        return false;
+    }
+
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, device_type) {
+        if (!cJSON_IsNumber(item)) {
+            continue;
+        }
+        if (entry->device_type_count >= ESP_MATTER_DEVICE_MAX_DEVICE_TYPE) {
+            ESP_LOGW(TAG, "deviceType count exceeds max (%d)", ESP_MATTER_DEVICE_MAX_DEVICE_TYPE);
+            break;
+        }
+        entry->device_type_list[entry->device_type_count++] = (uint32_t)item->valueint;
+    }
+    return entry->device_type_count > 0;
+}
+
+/**
+ * @brief Parse Matter endpoints from metadata
+ * 
+ */
+static void parse_matter_endpoints(cJSON *endpoints_data, matter_device_t *device, cJSON *fallback_device_type)
+{
+    device->endpoint_count = 0;
+
+    for (cJSON *ep = endpoints_data->child; ep; ep = ep->next) {
+        if (!ep->string || !cJSON_IsObject(ep)) {
+            continue;
+        }
+        uint16_t ep_id = (uint16_t)strtol(ep->string, NULL, 0);
+        if (ep_id == 0) {
+            continue; /* Skip root endpoint 0x0 */
+        }
+        endpoint_entry_t entry = {0};
+        cJSON *device_type = cJSON_GetObjectItem(ep, "deviceType");
+        if (!parse_device_type_cjson(device_type, &entry) &&
+            !parse_device_type_cjson(fallback_device_type, &entry)) {
+            ESP_LOGW(TAG, "Missing deviceType for endpoint %d, skipping", ep_id);
+            continue;
+        }
+        if (device->endpoint_count >= ESP_MATTER_DEVICE_MAX_ENDPOINT) {
+            ESP_LOGW(TAG, "Endpoint count exceeds max (%d), ignoring endpoint %d",
+                     ESP_MATTER_DEVICE_MAX_ENDPOINT, ep_id);
+            break;
+        }
+        entry.endpoint_id = ep_id;
+        device->endpoints[device->endpoint_count++] = entry;
+    }
+}
+
 static esp_err_t fetch_matter_node_metadata(matter_device_t *device)
 {
     if (!device) {
@@ -692,33 +758,17 @@ static esp_err_t fetch_matter_node_metadata(matter_device_t *device)
         if (metadata) {
             cJSON *matter = cJSON_GetObjectItem(metadata, "Matter");
             if (matter) {
-                cJSON *device_type = cJSON_GetObjectItem(matter, "deviceType");
-                if (device_type && cJSON_IsNumber(device_type)) {
-                    device->endpoint_count = 1;
-                    device->endpoints[0].device_type_id = (uint32_t)device_type->valueint;
-                    device->endpoints[0].endpoint_id = 1; /* Default endpoint ID */
-                    cJSON *endpoints_data = cJSON_GetObjectItem(matter, "endpoints");
-                    if (endpoints_data && cJSON_IsArray(endpoints_data)) {
-                        int ep_count = cJSON_GetArraySize(endpoints_data);
-                        int ep_id = 1;
-                        cJSON *ep_item = NULL;
-                        if (ep_count > 1) {
-                            ep_item = cJSON_GetArrayItem(endpoints_data, 1);
-                        } else if (ep_count == 1) {
-                            ep_item = cJSON_GetArrayItem(endpoints_data, 0);
-                        }
-                        if (ep_item && cJSON_IsNumber(ep_item)) {
-                            ep_id = ep_item->valueint;
-                        }
-                        device->endpoints[0].endpoint_id = (uint16_t)ep_id;
-                    }
+                cJSON *fallback_device_type = cJSON_GetObjectItem(matter, "deviceType");
+                cJSON *endpoints_data = cJSON_GetObjectItem(matter, "endpoints");
+                if (endpoints_data && cJSON_IsObject(endpoints_data)) {
+                    parse_matter_endpoints(endpoints_data, device, fallback_device_type);
                 }
 
                 cJSON *device_name = cJSON_GetObjectItem(matter, "deviceName");
                 if (device_name && cJSON_IsString(device_name) && device_name->valuestring) {
-                    strncpy(device->endpoints[0].device_name, device_name->valuestring,
+                    strncpy(device->device_name, device_name->valuestring,
                             ESP_MATTER_DEVICE_NAME_MAX_LEN - 1);
-                    device->endpoints[0].device_name[ESP_MATTER_DEVICE_NAME_MAX_LEN - 1] = '\0';
+                    device->device_name[ESP_MATTER_DEVICE_NAME_MAX_LEN - 1] = '\0';
                 }
 
                 cJSON *is_rainmaker = cJSON_GetObjectItem(matter, "isRainmaker");
