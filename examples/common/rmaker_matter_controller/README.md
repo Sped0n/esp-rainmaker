@@ -1,6 +1,6 @@
 # ESP RainMaker Controller Component
  
-[![Component Registry](https://components.espressif.com/components/espressif/esp_rainmaker_controller/badge.svg)](https://components.espressif.com/components/espressif/esp_rainmaker_controller)
+[![Component Registry](https://components.espressif.com/components/espressif/rmaker_matter_controller/badge.svg)](https://components.espressif.com/components/espressif/rmaker_matter_controller)
 
 A component to setup Matter controller in RainMaker.
 

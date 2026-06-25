@@ -8,8 +8,16 @@ menu "ESP Rainmaker Controller"
 
     config RAINMAKER_MATTER_CONTROLLER_MAX_ENDPOINT_COUNT_PER_DEVICE
         int "ESP Rainmaker Matter Controller Max Endpoint Count Per Device"
+        range 1 16
         default 4
         help
             Set the maximum endpoint count per device for ESP Rainmaker Matter Controller.
+
+    config RAINMAKER_MATTER_CONTROLLER_MAX_DEVICE_TYPE_COUNT_PER_ENDPOINT
+        int "ESP Rainmaker Matter Controller Max Device Type Count Per Endpoint"
+        range 1 16
+        default 4
+        help
+            Set the maximum device type count per endpoint for ESP Rainmaker Matter Controller.
 
 endmenu
