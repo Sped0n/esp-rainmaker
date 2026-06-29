@@ -7,11 +7,9 @@
 #include <esp_rmaker_cmd_resp.h>
 #include <esp_rmaker_utils.h>
 #include <esp_matter_core.h>
+#include <esp_matter_client.h>
 #include <esp_matter_controller_utils.h>
-#include <esp_matter_controller_cluster_command.h>
 #include <esp_matter_controller_client.h>
-#include <esp_matter_controller_write_command.h>
-#include <esp_matter_controller_read_command.h>
 #include <esp_check.h>
 #include <esp_log.h>
 #include <freertos/semphr.h>
@@ -25,6 +23,8 @@
 #include <utility>
 
 #include <app/ConcreteAttributePath.h>
+#include <app/BufferedReadCallback.h>
+#include <app/ChunkedWriteCallback.h>
 #include <app/MessageDef/StatusIB.h>
 #include <app/WriteClient.h>
 #include <app/server/Server.h>
@@ -58,10 +58,6 @@ char *s_cmd_resp_buffer = nullptr;
 cJSON *s_resp_root = nullptr;
 cJSON *s_resp_array = nullptr;
 SemaphoreHandle_t s_cmd_resp_mutex = nullptr;
-const int INVOKE_CMD_HANDLED_EVENT = BIT0;
-const int WRITE_ATTR_HANDLED_EVENT = BIT1;
-const int READ_HANDLED_EVENT = BIT2;
-EventGroupHandle_t s_matter_controller_event_group;
 bool s_cmd_resp_enabled = false;
 bool s_invoke_cmd_registered = false;
 bool s_write_attr_cmd_registered = false;
@@ -97,13 +93,15 @@ static void reset_response_json(void)
 static esp_err_t start_response_array(const char *array_key)
 {
     reset_response_json();
-    s_resp_root = cJSON_CreateObject();
-    s_resp_array = cJSON_CreateArray();
-    if (!s_resp_root || !s_resp_array) {
-        reset_response_json();
+    cJSON *root = cJSON_CreateObject();
+    cJSON *array = cJSON_CreateArray();
+    if (!root || !array || !cJSON_AddItemToObject(root, array_key, array)) {
+        cJSON_Delete(root);
+        cJSON_Delete(array);
         return ESP_ERR_NO_MEM;
     }
-    cJSON_AddItemToObject(s_resp_root, array_key, s_resp_array);
+    s_resp_root = root;
+    s_resp_array = array;
     return ESP_OK;
 }
 
@@ -157,76 +155,316 @@ static void add_tlv_value_to_cjson(chip::TLV::TLVReader *data, const char *key, 
     }
     cJSON *json = NULL;
     if (app_rmaker_matter_tlv_to_json(*data, &json) == ESP_OK && json) {
-        cJSON_AddItemToObject(obj, key, json);
-        return;
+        if (cJSON_AddItemToObject(obj, key, json)) {
+            return;
+        }
+        cJSON_Delete(json);
     }
     cJSON_AddStringToObject(obj, key, "tlv_decode_failed");
 }
 
-class RmakerWriteCommand : public controller::write_command {
+class OperationContext {
+public:
+    OperationContext(cJSON *resp_obj, cJSON *resp_array = nullptr)
+        : m_resp_obj(resp_obj)
+        , m_resp_array(resp_array)
+        , m_mutex(xSemaphoreCreateMutexStatic(&m_mutex_storage))
+        , m_done(xSemaphoreCreateBinaryStatic(&m_done_storage))
+    {
+    }
+
+    void AddWriteResponse(StatusIB status)
+    {
+        xSemaphoreTake(m_mutex, portMAX_DELAY);
+        if (Attached() && !HasStatus()) {
+            CHIP_ERROR error = status.ToChipError();
+            if (error != CHIP_NO_ERROR) {
+                AddFailureLocked(chip::ErrorStr(error));
+            }
+        }
+        xSemaphoreGive(m_mutex);
+    }
+
+    void CompleteInvoke(const StatusIB &status, TLVReader *response_data)
+    {
+        xSemaphoreTake(m_mutex, portMAX_DELAY);
+        if (m_state == State::pending) {
+            CHIP_ERROR error = status.ToChipError();
+            if (error == CHIP_NO_ERROR) {
+                cJSON_AddStringToObject(m_resp_obj, "status", "success");
+                if (response_data) {
+                    add_tlv_value_to_cjson(response_data, "response_data", m_resp_obj);
+                }
+            } else {
+                AddFailureLocked(chip::ErrorStr(error));
+            }
+            m_state = State::completed;
+            xSemaphoreGive(m_done);
+        } else if (m_state == State::detached) {
+            m_state = State::completed;
+        }
+        xSemaphoreGive(m_mutex);
+        Release();
+    }
+
+    void AddReadAttribute(const chip::app::ConcreteDataAttributePath &path, chip::TLV::TLVReader *data,
+                          const chip::app::StatusIB &status)
+    {
+        xSemaphoreTake(m_mutex, portMAX_DELAY);
+        if (!Attached() || !m_resp_array) {
+            xSemaphoreGive(m_mutex);
+            return;
+        }
+        char endpoint_id_str[8] = {};
+        char cluster_id_str[12] = {};
+        char attribute_id_str[12] = {};
+        snprintf(endpoint_id_str, sizeof(endpoint_id_str), "%u", path.mEndpointId);
+        snprintf(cluster_id_str, sizeof(cluster_id_str), "0x%08lx", (unsigned long)path.mClusterId);
+        snprintf(attribute_id_str, sizeof(attribute_id_str), "0x%08lx", (unsigned long)path.mAttributeId);
+        cJSON *result = cJSON_CreateObject();
+        if (result) {
+            if (!cJSON_AddItemToArray(m_resp_array, result)) {
+                cJSON_Delete(result);
+                xSemaphoreGive(m_mutex);
+                return;
+            }
+            cJSON_AddStringToObject(result, "endpoint_id", endpoint_id_str);
+            cJSON_AddStringToObject(result, "cluster_id", cluster_id_str);
+            cJSON_AddStringToObject(result, "attribute_id", attribute_id_str);
+            CHIP_ERROR error = status.ToChipError();
+            if (error != CHIP_NO_ERROR) {
+                cJSON_AddStringToObject(result, "status", "failure");
+                cJSON_AddStringToObject(result, "reason", chip::ErrorStr(error));
+            } else if (data) {
+                add_tlv_value_to_cjson(data, "attribute_value", result);
+            }
+        }
+        xSemaphoreGive(m_mutex);
+    }
+
+    void AddReadEvent(const chip::app::EventHeader &header, chip::TLV::TLVReader *data,
+                      const chip::app::StatusIB *status)
+    {
+        xSemaphoreTake(m_mutex, portMAX_DELAY);
+        if (!Attached() || !m_resp_array) {
+            xSemaphoreGive(m_mutex);
+            return;
+        }
+        char endpoint_id_str[8] = {};
+        char cluster_id_str[12] = {};
+        char event_id_str[12] = {};
+        snprintf(endpoint_id_str, sizeof(endpoint_id_str), "%u", header.mPath.mEndpointId);
+        snprintf(cluster_id_str, sizeof(cluster_id_str), "0x%08lx", (unsigned long)header.mPath.mClusterId);
+        snprintf(event_id_str, sizeof(event_id_str), "0x%08lx", (unsigned long)header.mPath.mEventId);
+        cJSON *result = cJSON_CreateObject();
+        if (result) {
+            if (!cJSON_AddItemToArray(m_resp_array, result)) {
+                cJSON_Delete(result);
+                xSemaphoreGive(m_mutex);
+                return;
+            }
+            cJSON_AddStringToObject(result, "endpoint_id", endpoint_id_str);
+            cJSON_AddStringToObject(result, "cluster_id", cluster_id_str);
+            cJSON_AddStringToObject(result, "event_id", event_id_str);
+            CHIP_ERROR error = status ? status->ToChipError() : CHIP_NO_ERROR;
+            if (error != CHIP_NO_ERROR) {
+                cJSON_AddStringToObject(result, "status", "failure");
+                cJSON_AddStringToObject(result, "reason", chip::ErrorStr(error));
+            } else if (data) {
+                add_tlv_value_to_cjson(data, "event_data", result);
+            }
+        }
+        xSemaphoreGive(m_mutex);
+    }
+
+    void AddFailure(const char *reason)
+    {
+        xSemaphoreTake(m_mutex, portMAX_DELAY);
+        AddFailureLocked(reason);
+        xSemaphoreGive(m_mutex);
+    }
+
+    void Complete(bool set_success = false)
+    {
+        xSemaphoreTake(m_mutex, portMAX_DELAY);
+        if (m_state == State::pending) {
+            if (set_success && !HasStatus()) {
+                cJSON_AddStringToObject(m_resp_obj, "status", "success");
+            }
+            m_state = State::completed;
+            xSemaphoreGive(m_done);
+        } else if (m_state == State::detached) {
+            m_state = State::completed;
+        }
+        xSemaphoreGive(m_mutex);
+        Release();
+    }
+
+    esp_err_t Wait(const char *timeout_reason)
+    {
+        if (xSemaphoreTake(m_done, pdMS_TO_TICKS(CONFIG_RMAKER_MTCTL_CMDRESP_MTCMD_TIMEOUT_MS)) == pdTRUE) {
+            return ESP_OK;
+        }
+        /* Once the timed wait expires, the deadline wins over concurrent completion. */
+        xSemaphoreTake(m_mutex, portMAX_DELAY);
+        ReplaceFailureLocked(timeout_reason);
+        m_state = State::detached;
+        m_resp_obj = nullptr;
+        m_resp_array = nullptr;
+        xSemaphoreGive(m_mutex);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    void ReleaseHandler()
+    {
+        Release();
+    }
+
+private:
+    enum class State { pending, completed, detached };
+
+    bool Attached() const
+    {
+        return m_state != State::detached && m_resp_obj;
+    }
+    bool HasStatus() const
+    {
+        return m_resp_obj && cJSON_GetObjectItemCaseSensitive(m_resp_obj, "status");
+    }
+    void AddFailureLocked(const char *reason)
+    {
+        if (Attached() && !HasStatus()) {
+            cJSON_AddStringToObject(m_resp_obj, "status", "failure");
+            cJSON_AddStringToObject(m_resp_obj, "reason", reason ? reason : "failure");
+        }
+    }
+    void ReplaceFailureLocked(const char *reason)
+    {
+        if (!Attached()) {
+            return;
+        }
+        cJSON_DeleteItemFromObjectCaseSensitive(m_resp_obj, "status");
+        cJSON_DeleteItemFromObjectCaseSensitive(m_resp_obj, "reason");
+        cJSON_AddStringToObject(m_resp_obj, "status", "failure");
+        cJSON_AddStringToObject(m_resp_obj, "reason", reason ? reason : "failure");
+    }
+    void Release()
+    {
+        xSemaphoreTake(m_mutex, portMAX_DELAY);
+        bool destroy = --m_references == 0;
+        xSemaphoreGive(m_mutex);
+        if (destroy) {
+            chip::Platform::Delete(this);
+        }
+    }
+
+    cJSON *m_resp_obj;
+    cJSON *m_resp_array;
+    StaticSemaphore_t m_mutex_storage;
+    StaticSemaphore_t m_done_storage;
+    SemaphoreHandle_t m_mutex;
+    SemaphoreHandle_t m_done;
+    /* The command and waiting handler each release one reference. */
+    unsigned m_references = 2;
+    State m_state = State::pending;
+};
+
+class RmakerWriteCommand : public WriteClient::Callback {
 public:
     RmakerWriteCommand(uint64_t node_id, uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id,
-                       const char *attr_val, cJSON *resp_obj)
-        : controller::write_command(node_id, endpoint_id, cluster_id, attribute_id, attr_val, chip::NullOptional)
-        , m_resp_obj(resp_obj)
+                       const char *attr_val, OperationContext *context)
+        : m_node_id(node_id)
+        , m_chunked_callback(this)
+        , m_attr_vals(attr_val)
+        , m_context(context)
+        , m_on_device_connected_cb(on_device_connected, this)
+        , m_on_device_connection_failure_cb(on_device_connection_failure, this)
     {
-    }
-
-    void Deactivate()
-    {
-        m_active = false;
-        m_resp_obj = nullptr;
-    }
-
-    void OnResponse(const WriteClient *client, const ConcreteDataAttributePath &path, StatusIB status) override
-    {
-        (void)client;
-        (void)path;
-        CHIP_ERROR error = status.ToChipError();
-        cJSON *resp_obj = m_active ? m_resp_obj : nullptr;
-        if (!resp_obj || cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
-        return;
-    }
-    if (error == CHIP_NO_ERROR) {
-        cJSON_AddStringToObject(resp_obj, "status", "success");
-        } else {
-            cJSON_AddStringToObject(resp_obj, "status", "failure");
-            cJSON_AddStringToObject(resp_obj, "reason", chip::ErrorStr(error));
+        m_attr_paths.Alloc(1);
+        if (m_attr_paths.Get()) {
+            m_attr_paths[0] = AttributePathParams(endpoint_id, cluster_id, attribute_id);
         }
     }
 
-    void OnError(const WriteClient *client, CHIP_ERROR error) override
+    esp_err_t Send()
     {
-        (void)client;
-        cJSON *resp_obj = m_active ? m_resp_obj : nullptr;
-        if (resp_obj && !cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
-        cJSON_AddStringToObject(resp_obj, "status", "failure");
-            cJSON_AddStringToObject(resp_obj, "reason", chip::ErrorStr(error));
+        if (!m_attr_paths.Get()) {
+            FailSubmission("attribute path allocation failed");
+            return ESP_ERR_NO_MEM;
         }
-        xEventGroupSetBits(s_matter_controller_event_group, WRITE_ATTR_HANDLED_EVENT);
+#ifdef CONFIG_ESP_MATTER_ENABLE_MATTER_SERVER
+        chip::Server::GetInstance().GetCASESessionManager()->FindOrEstablishSession(
+            chip::ScopedNodeId(m_node_id, get_fabric_index()), &m_on_device_connected_cb,
+            &m_on_device_connection_failure_cb);
+        return ESP_OK;
+#else
+        auto &controller_instance = controller::matter_controller_client::get_instance();
+#ifdef CONFIG_ESP_MATTER_COMMISSIONER_ENABLE
+        CHIP_ERROR error = controller_instance.get_commissioner()->GetConnectedDevice(
+                               m_node_id, &m_on_device_connected_cb, &m_on_device_connection_failure_cb);
+#else
+        CHIP_ERROR error = controller_instance.get_controller()->GetConnectedDevice(
+                               m_node_id, &m_on_device_connected_cb, &m_on_device_connection_failure_cb);
+#endif
+        if (error == CHIP_NO_ERROR) {
+            return ESP_OK;
+        }
+        FailSubmission(chip::ErrorStr(error));
+        return ESP_FAIL;
+#endif
     }
 
-    void OnDone(WriteClient *client) override
+    void OnResponse(const WriteClient *, const ConcreteDataAttributePath &, StatusIB status) override
     {
-        (void)client;
-        cJSON *resp_obj = m_active ? m_resp_obj : nullptr;
-        if (resp_obj && !cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
-        cJSON_AddStringToObject(resp_obj, "status", "success");
-        }
-        xEventGroupSetBits(s_matter_controller_event_group, WRITE_ATTR_HANDLED_EVENT);
+        m_context->AddWriteResponse(status);
+    }
+    void OnError(const WriteClient *, CHIP_ERROR error) override
+    {
+        m_context->AddFailure(chip::ErrorStr(error));
+    }
+    void OnDone(WriteClient *) override
+    {
+        m_context->Complete(true);
         chip::Platform::Delete(this);
     }
 
 private:
-    cJSON *m_resp_obj;
-    bool m_active = true;
+    static void on_device_connected(void *context, chip::Messaging::ExchangeManager &exchange_mgr,
+                                    const chip::SessionHandle &session_handle)
+    {
+        RmakerWriteCommand *cmd = static_cast<RmakerWriteCommand *>(context);
+        chip::OperationalDeviceProxy device_proxy(&exchange_mgr, session_handle);
+        esp_err_t error = client::interaction::write::send_request(&device_proxy, cmd->m_attr_paths, cmd->m_attr_vals,
+                                                                   cmd->m_chunked_callback, chip::NullOptional);
+        if (error != ESP_OK) {
+            cmd->FailSubmission("send_command failed");
+        }
+    }
+    static void on_device_connection_failure(void *context, const chip::ScopedNodeId &, CHIP_ERROR error)
+    {
+        static_cast<RmakerWriteCommand *>(context)->FailSubmission(chip::ErrorStr(error));
+    }
+    void FailSubmission(const char *reason)
+    {
+        m_context->AddFailure(reason);
+        m_context->Complete();
+        chip::Platform::Delete(this);
+    }
+
+    uint64_t m_node_id;
+    chip::Platform::ScopedMemoryBufferWithSize<AttributePathParams> m_attr_paths;
+    ChunkedWriteCallback m_chunked_callback;
+    client::interaction::multiple_write_encodable_type m_attr_vals;
+    OperationContext *m_context;
+    chip::Callback::Callback<chip::OnDeviceConnected> m_on_device_connected_cb;
+    chip::Callback::Callback<chip::OnDeviceConnectionFailure> m_on_device_connection_failure_cb;
 };
 
 class RmakerInvokeCommand {
 public:
     RmakerInvokeCommand(uint64_t destination_id, uint16_t endpoint_id, uint32_t cluster_id, uint32_t command_id,
                         const char *command_data_field,
-                        const chip::Optional<uint16_t> timed_interaction_timeout_ms, cJSON *resp_obj)
+                        const chip::Optional<uint16_t> timed_interaction_timeout_ms, OperationContext *context)
         : m_destination_id(destination_id)
         , m_endpoint_id(endpoint_id)
         , m_cluster_id(cluster_id)
@@ -234,7 +472,7 @@ public:
         , m_command_data_field(command_data_field,
                                esp_matter::client::interaction::custom_encodable_type::interaction_type::k_invoke_cmd)
         , m_timed_interaction_timeout_ms(timed_interaction_timeout_ms)
-        , m_resp_obj(resp_obj)
+        , m_context(context)
         , m_on_device_connected_cb(on_device_connected, this)
         , m_on_device_connection_failure_cb(on_device_connection_failure, this)
     {
@@ -243,6 +481,7 @@ public:
     esp_err_t Send()
     {
         if (chip::IsGroupId(m_destination_id)) {
+            FailSubmission("group invoke is not supported");
             return ESP_ERR_NOT_SUPPORTED;
         }
 #ifdef CONFIG_ESP_MATTER_ENABLE_MATTER_SERVER
@@ -265,15 +504,9 @@ public:
         if (err == CHIP_NO_ERROR) {
             return ESP_OK;
         }
-        chip::Platform::Delete(this);
+        FailSubmission(chip::ErrorStr(err));
         return ESP_FAIL;
 #endif
-    }
-
-    void Deactivate()
-    {
-        m_active = false;
-        m_resp_obj = nullptr;
     }
 
 private:
@@ -289,9 +522,7 @@ private:
                             cmd, &device_proxy, command_path, cmd->m_command_data_field, on_success, on_error,
                             cmd->m_timed_interaction_timeout_ms);
         if (err != ESP_OK) {
-            cmd->set_failure("send_command failed");
-            xEventGroupSetBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
-            chip::Platform::Delete(cmd);
+            cmd->FailSubmission("send_command failed");
         }
     }
 
@@ -299,41 +530,29 @@ private:
     {
         (void)peer_id;
         RmakerInvokeCommand *cmd = reinterpret_cast<RmakerInvokeCommand *>(context);
-        cmd->set_failure(chip::ErrorStr(error));
-        xEventGroupSetBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
-        chip::Platform::Delete(cmd);
+        cmd->FailSubmission(chip::ErrorStr(error));
     }
 
     static void on_success(void *ctx, const ConcreteCommandPath &command_path, const StatusIB &status,
                            TLVReader *response_data)
     {
         (void)command_path;
-        (void)status;
         RmakerInvokeCommand *cmd = reinterpret_cast<RmakerInvokeCommand *>(ctx);
-        if (cmd->m_active && cmd->m_resp_obj) {
-            cJSON_AddStringToObject(cmd->m_resp_obj, "status", "success");
-            if (response_data) {
-                add_tlv_value_to_cjson(response_data, "response_data", cmd->m_resp_obj);
-            }
-        }
-        xEventGroupSetBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
+        cmd->m_context->CompleteInvoke(status, response_data);
         chip::Platform::Delete(cmd);
     }
 
     static void on_error(void *ctx, CHIP_ERROR error)
     {
         RmakerInvokeCommand *cmd = reinterpret_cast<RmakerInvokeCommand *>(ctx);
-        cmd->set_failure(error.AsString());
-        xEventGroupSetBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
-        chip::Platform::Delete(cmd);
+        cmd->FailSubmission(error.AsString());
     }
 
-    void set_failure(const char *reason)
+    void FailSubmission(const char *reason)
     {
-        if (m_active && m_resp_obj && !cJSON_GetObjectItemCaseSensitive(m_resp_obj, "status")) {
-            cJSON_AddStringToObject(m_resp_obj, "status", "failure");
-            cJSON_AddStringToObject(m_resp_obj, "reason", reason ? reason : "failure");
-        }
+        m_context->AddFailure(reason);
+        m_context->Complete();
+        chip::Platform::Delete(this);
     }
 
     uint64_t m_destination_id;
@@ -342,117 +561,108 @@ private:
     uint32_t m_command_id;
     esp_matter::client::interaction::custom_encodable_type m_command_data_field;
     chip::Optional<uint16_t> m_timed_interaction_timeout_ms;
-    cJSON *m_resp_obj;
-    bool m_active = true;
+    OperationContext *m_context;
     chip::Callback::Callback<chip::OnDeviceConnected> m_on_device_connected_cb;
     chip::Callback::Callback<chip::OnDeviceConnectionFailure> m_on_device_connection_failure_cb;
 };
 
-class RmakerReadCommand : public controller::read_command {
+class RmakerReadCommand : public ReadClient::Callback {
 public:
     RmakerReadCommand(uint64_t node_id,
                       chip::Platform::ScopedMemoryBufferWithSize<AttributePathParams> &&attr_paths,
                       chip::Platform::ScopedMemoryBufferWithSize<EventPathParams> &&event_paths,
-                      cJSON *resp_root, cJSON *resp_array)
-        : controller::read_command(node_id, std::move(attr_paths), std::move(event_paths), nullptr, nullptr, nullptr)
-        , m_resp_root(resp_root)
-        , m_resp_array(resp_array)
+                      OperationContext *context)
+        : m_node_id(node_id)
+        , m_buffered_read_cb(*this)
+        , m_attr_paths(std::move(attr_paths))
+        , m_event_paths(std::move(event_paths))
+        , m_context(context)
+        , m_on_device_connected_cb(on_device_connected, this)
+        , m_on_device_connection_failure_cb(on_device_connection_failure, this)
     {
     }
 
-    void Deactivate()
+    esp_err_t Send()
     {
-        m_active = false;
-        m_resp_root = nullptr;
-        m_resp_array = nullptr;
+#ifdef CONFIG_ESP_MATTER_ENABLE_MATTER_SERVER
+        chip::Server::GetInstance().GetCASESessionManager()->FindOrEstablishSession(
+            chip::ScopedNodeId(m_node_id, get_fabric_index()), &m_on_device_connected_cb,
+            &m_on_device_connection_failure_cb);
+        return ESP_OK;
+#else
+        auto &controller_instance = controller::matter_controller_client::get_instance();
+#ifdef CONFIG_ESP_MATTER_COMMISSIONER_ENABLE
+        CHIP_ERROR error = controller_instance.get_commissioner()->GetConnectedDevice(
+                               m_node_id, &m_on_device_connected_cb, &m_on_device_connection_failure_cb);
+#else
+        CHIP_ERROR error = controller_instance.get_controller()->GetConnectedDevice(
+                               m_node_id, &m_on_device_connected_cb, &m_on_device_connection_failure_cb);
+#endif
+        if (error == CHIP_NO_ERROR) {
+            return ESP_OK;
+        }
+        FailSubmission(chip::ErrorStr(error));
+        return ESP_FAIL;
+#endif
     }
 
     void OnAttributeData(const chip::app::ConcreteDataAttributePath &path, chip::TLV::TLVReader *data,
                          const chip::app::StatusIB &status) override
     {
-        if (!m_active || !m_resp_array) {
-        return;
-    }
-    char endpoint_id_str[8] = {0};
-    char cluster_id_str[12] = {0};
-    char attribute_id_str[12] = {0};
-    snprintf(endpoint_id_str, sizeof(endpoint_id_str), "%u", path.mEndpointId);
-        snprintf(cluster_id_str, sizeof(cluster_id_str), "0x%08lx", (unsigned long)path.mClusterId);
-        snprintf(attribute_id_str, sizeof(attribute_id_str), "0x%08lx", (unsigned long)path.mAttributeId);
-
-        cJSON *result = cJSON_CreateObject();
-        if (!result) {
-        return;
-    }
-    cJSON_AddItemToArray(m_resp_array, result);
-    cJSON_AddStringToObject(result, "endpoint_id", endpoint_id_str);
-    cJSON_AddStringToObject(result, "cluster_id", cluster_id_str);
-    cJSON_AddStringToObject(result, "attribute_id", attribute_id_str);
-    CHIP_ERROR error = status.ToChipError();
-    if (error != CHIP_NO_ERROR) {
-        cJSON_AddStringToObject(result, "status", "failure");
-            cJSON_AddStringToObject(result, "reason", chip::ErrorStr(error));
-            return;
-        }
-        if (data) {
-        add_tlv_value_to_cjson(data, "attribute_value", result);
-        }
+        m_context->AddReadAttribute(path, data, status);
     }
 
     void OnEventData(const chip::app::EventHeader &header, chip::TLV::TLVReader *data,
                      const chip::app::StatusIB *status) override
     {
-        if (!m_active || !m_resp_array) {
-        return;
-    }
-    char endpoint_id_str[8] = {0};
-    char cluster_id_str[12] = {0};
-    char event_id_str[12] = {0};
-    snprintf(endpoint_id_str, sizeof(endpoint_id_str), "%u", header.mPath.mEndpointId);
-        snprintf(cluster_id_str, sizeof(cluster_id_str), "0x%08lx", (unsigned long)header.mPath.mClusterId);
-        snprintf(event_id_str, sizeof(event_id_str), "0x%08lx", (unsigned long)header.mPath.mEventId);
-
-        cJSON *result = cJSON_CreateObject();
-        if (!result) {
-        return;
-    }
-    cJSON_AddItemToArray(m_resp_array, result);
-    cJSON_AddStringToObject(result, "endpoint_id", endpoint_id_str);
-    cJSON_AddStringToObject(result, "cluster_id", cluster_id_str);
-    cJSON_AddStringToObject(result, "event_id", event_id_str);
-    if (status) {
-        CHIP_ERROR error = status->ToChipError();
-            if (error != CHIP_NO_ERROR) {
-                cJSON_AddStringToObject(result, "status", "failure");
-                cJSON_AddStringToObject(result, "reason", chip::ErrorStr(error));
-                return;
-            }
-        }
-        if (data) {
-        add_tlv_value_to_cjson(data, "event_data", result);
-        }
+        m_context->AddReadEvent(header, data, status);
     }
 
     void OnError(CHIP_ERROR error) override
     {
-        if (m_active && m_resp_root && !cJSON_GetObjectItemCaseSensitive(m_resp_root, "status")) {
-        cJSON_AddStringToObject(m_resp_root, "status", "failure");
-            cJSON_AddStringToObject(m_resp_root, "reason", chip::ErrorStr(error));
-        }
-        xEventGroupSetBits(s_matter_controller_event_group, READ_HANDLED_EVENT);
+        m_context->AddFailure(chip::ErrorStr(error));
     }
 
     void OnDone(ReadClient *apReadClient) override
     {
         (void)apReadClient;
-        xEventGroupSetBits(s_matter_controller_event_group, READ_HANDLED_EVENT);
+        m_context->Complete();
         chip::Platform::Delete(this);
     }
 
+    void OnDeallocatePaths(chip::app::ReadPrepareParams &&) override {}
+
 private:
-    cJSON *m_resp_root;
-    cJSON *m_resp_array;
-    bool m_active = true;
+    static void on_device_connected(void *context, chip::Messaging::ExchangeManager &exchange_mgr,
+                                    const chip::SessionHandle &session_handle)
+    {
+        RmakerReadCommand *cmd = static_cast<RmakerReadCommand *>(context);
+        chip::OperationalDeviceProxy device_proxy(&exchange_mgr, session_handle);
+        esp_err_t error = client::interaction::read::send_request(
+                              &device_proxy, cmd->m_attr_paths.Get(), cmd->m_attr_paths.AllocatedSize(), cmd->m_event_paths.Get(),
+                              cmd->m_event_paths.AllocatedSize(), cmd->m_buffered_read_cb);
+        if (error != ESP_OK) {
+            cmd->FailSubmission("send_command failed");
+        }
+    }
+    static void on_device_connection_failure(void *context, const chip::ScopedNodeId &, CHIP_ERROR error)
+    {
+        static_cast<RmakerReadCommand *>(context)->FailSubmission(chip::ErrorStr(error));
+    }
+    void FailSubmission(const char *reason)
+    {
+        m_context->AddFailure(reason);
+        m_context->Complete();
+        chip::Platform::Delete(this);
+    }
+
+    uint64_t m_node_id;
+    BufferedReadCallback m_buffered_read_cb;
+    chip::Platform::ScopedMemoryBufferWithSize<AttributePathParams> m_attr_paths;
+    chip::Platform::ScopedMemoryBufferWithSize<EventPathParams> m_event_paths;
+    OperationContext *m_context;
+    chip::Callback::Callback<chip::OnDeviceConnected> m_on_device_connected_cb;
+    chip::Callback::Callback<chip::OnDeviceConnectionFailure> m_on_device_connection_failure_cb;
 };
 
 esp_err_t invoke_cluster_command(uint64_t destination_id, uint16_t endpoint_id, uint32_t cluster_id,
@@ -461,29 +671,26 @@ esp_err_t invoke_cluster_command(uint64_t destination_id, uint16_t endpoint_id, 
 {
     ESP_LOGI(TAG, "Send cluster command [cluster 0x%lx, command 0x%lx] to node %llx endpoint %x", cluster_id, command_id,
              destination_id, endpoint_id);
-    RmakerInvokeCommand *cluster_command = chip::Platform::New<RmakerInvokeCommand>(
-                                               destination_id, endpoint_id, cluster_id, command_id, command_data_field, timed_interaction_timeout_ms, resp_obj);
-    if (!cluster_command) {
+    OperationContext *context = chip::Platform::New<OperationContext>(resp_obj);
+    if (!context) {
         return ESP_ERR_NO_MEM;
     }
-    esp_err_t err = ESP_OK;
+    RmakerInvokeCommand *cluster_command = chip::Platform::New<RmakerInvokeCommand>(
+                                               destination_id, endpoint_id, cluster_id, command_id, command_data_field, timed_interaction_timeout_ms, context);
+    if (!cluster_command) {
+        context->Complete();
+        context->ReleaseHandler();
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t err;
     {
         lock::ScopedChipStackLock lock(3000);
-        xEventGroupClearBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
         err = cluster_command->Send();
     }
     if (err == ESP_OK) {
-        EventBits_t bits = xEventGroupWaitBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT, true, true,
-                                               pdMS_TO_TICKS(CONFIG_RMAKER_MTCTL_CMDRESP_MTCMD_TIMEOUT_MS));
-        if ((bits & INVOKE_CMD_HANDLED_EVENT) == 0) {
-            if (resp_obj && !cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
-                cJSON_AddStringToObject(resp_obj, "status", "failure");
-                cJSON_AddStringToObject(resp_obj, "reason", "invoke command timeout");
-            }
-            cluster_command->Deactivate();
-            err = ESP_ERR_TIMEOUT;
-        }
+        err = context->Wait("invoke command timeout");
     }
+    context->ReleaseHandler();
     return err;
 }
 
@@ -573,7 +780,12 @@ esp_err_t esp_rmaker_matter_controller_invoke_cmd_handler(const void *in_data, s
             reset_response_json();
             return ESP_ERR_NO_MEM;
         }
-        cJSON_AddItemToArray(s_resp_array, resp_obj);
+        if (!cJSON_AddItemToArray(s_resp_array, resp_obj)) {
+            cJSON_Delete(resp_obj);
+            cJSON_Delete(root);
+            reset_response_json();
+            return ESP_ERR_NO_MEM;
+        }
         if (json_get_string(object, "matter_node_id", id_buffer, sizeof(id_buffer))) {
             cJSON_AddStringToObject(resp_obj, "matter_node_id", id_buffer);
             node_id = string_to_uint64(id_buffer);
@@ -613,28 +825,25 @@ esp_err_t write_attr_command(uint64_t node_id, uint16_t endpoint_id, uint32_t cl
     ESP_LOGI(TAG, "Send write_attr command [cluster 0x%lx, attribute 0x%lx] to node %llx endpoint %x", cluster_id,
              attribute_id,
              node_id, endpoint_id);
+    OperationContext *context = chip::Platform::New<OperationContext>(resp_obj);
+    ESP_RETURN_ON_FALSE(context, ESP_ERR_NO_MEM, TAG, "Failed to allocate write context");
     RmakerWriteCommand *write_command = chip::Platform::New<RmakerWriteCommand>(node_id, endpoint_id, cluster_id,
                                                                                 attribute_id, attr_val,
-                                                                                resp_obj);
-    ESP_RETURN_ON_FALSE(write_command, ESP_ERR_NO_MEM, TAG, "Failed to allocate write command");
-    esp_err_t err = ESP_OK;
+                                                                                context);
+    if (!write_command) {
+        context->Complete();
+        context->ReleaseHandler();
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t err;
     {
         lock::ScopedChipStackLock lock(3000);
-        xEventGroupClearBits(s_matter_controller_event_group, WRITE_ATTR_HANDLED_EVENT);
-        err = write_command->send_command();
+        err = write_command->Send();
     }
     if (err == ESP_OK) {
-        EventBits_t bits = xEventGroupWaitBits(s_matter_controller_event_group, WRITE_ATTR_HANDLED_EVENT, true, true,
-                                               pdMS_TO_TICKS(CONFIG_RMAKER_MTCTL_CMDRESP_MTCMD_TIMEOUT_MS));
-        if ((bits & WRITE_ATTR_HANDLED_EVENT) == 0) {
-            if (resp_obj && !cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
-                cJSON_AddStringToObject(resp_obj, "status", "failure");
-                cJSON_AddStringToObject(resp_obj, "reason", "write attribute timeout");
-            }
-            write_command->Deactivate();
-            err = ESP_ERR_TIMEOUT;
-        }
+        err = context->Wait("write attribute timeout");
     }
+    context->ReleaseHandler();
     return err;
 }
 
@@ -643,34 +852,26 @@ esp_err_t read_attr_or_event_command(uint64_t node_id,
                                      chip::Platform::ScopedMemoryBufferWithSize<EventPathParams> &&event_paths)
 {
     ESP_LOGI(TAG, "Send read attribute/event command to node %llx", node_id);
-    RmakerReadCommand *cmd = chip::Platform::New<RmakerReadCommand>(node_id, std::move(attr_paths), std::move(event_paths),
-                                                                    s_resp_root, s_resp_array);
-    if (!cmd) {
+    OperationContext *context = chip::Platform::New<OperationContext>(s_resp_root, s_resp_array);
+    if (!context) {
         return ESP_ERR_NO_MEM;
     }
-    esp_err_t err = ESP_OK;
+    RmakerReadCommand *cmd = chip::Platform::New<RmakerReadCommand>(node_id, std::move(attr_paths), std::move(event_paths),
+                                                                    context);
+    if (!cmd) {
+        context->Complete();
+        context->ReleaseHandler();
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t err;
     {
         lock::ScopedChipStackLock lock(3000);
-        xEventGroupClearBits(s_matter_controller_event_group, READ_HANDLED_EVENT);
-        err = cmd->send_command();
+        err = cmd->Send();
     }
-    if (err != ESP_OK) {
-        if (s_resp_root) {
-            cJSON_AddStringToObject(s_resp_root, "status", "failure");
-            cJSON_AddStringToObject(s_resp_root, "reason", "send_command failed");
-        }
-    } else {
-        EventBits_t bits = xEventGroupWaitBits(s_matter_controller_event_group, READ_HANDLED_EVENT, true, true,
-                                               pdMS_TO_TICKS(CONFIG_RMAKER_MTCTL_CMDRESP_MTCMD_TIMEOUT_MS));
-        if ((bits & READ_HANDLED_EVENT) == 0) {
-            if (s_resp_root) {
-                cJSON_AddStringToObject(s_resp_root, "status", "failure");
-                cJSON_AddStringToObject(s_resp_root, "reason", "read command timeout");
-            }
-            cmd->Deactivate();
-            err = ESP_ERR_TIMEOUT;
-        }
+    if (err == ESP_OK) {
+        err = context->Wait("read command timeout");
     }
+    context->ReleaseHandler();
     return err;
 }
 
@@ -751,7 +952,12 @@ esp_err_t esp_rmaker_matter_controller_write_attr_handler(const void *in_data, s
             reset_response_json();
             return ESP_ERR_NO_MEM;
         }
-        cJSON_AddItemToArray(s_resp_array, resp_obj);
+        if (!cJSON_AddItemToArray(s_resp_array, resp_obj)) {
+            cJSON_Delete(resp_obj);
+            cJSON_Delete(root);
+            reset_response_json();
+            return ESP_ERR_NO_MEM;
+        }
         if (json_get_string(object, "matter_node_id", id_buffer, sizeof(id_buffer))) {
             cJSON_AddStringToObject(resp_obj, "matter_node_id", id_buffer);
             node_id = string_to_uint64(id_buffer);
@@ -888,15 +1094,23 @@ esp_err_t esp_rmaker_matter_controller_read_handler(const void *in_data, size_t 
     }
 
     reset_response_json();
-    s_resp_root = cJSON_CreateObject();
-    s_resp_array = cJSON_CreateArray();
-    if (!s_resp_root || !s_resp_array) {
+    cJSON *resp_root = cJSON_CreateObject();
+    cJSON *resp_array = cJSON_CreateArray();
+    if (!resp_root || !resp_array) {
         cJSON_Delete(root);
-        reset_response_json();
+        cJSON_Delete(resp_root);
+        cJSON_Delete(resp_array);
         return ESP_ERR_NO_MEM;
     }
-    cJSON_AddStringToObject(s_resp_root, "matter_node_id", node_id_str);
-    cJSON_AddItemToObject(s_resp_root, "read_results", s_resp_array);
+    cJSON_AddStringToObject(resp_root, "matter_node_id", node_id_str);
+    if (!cJSON_AddItemToObject(resp_root, "read_results", resp_array)) {
+        cJSON_Delete(root);
+        cJSON_Delete(resp_root);
+        cJSON_Delete(resp_array);
+        return ESP_ERR_NO_MEM;
+    }
+    s_resp_root = resp_root;
+    s_resp_array = resp_array;
     if (read_attr_or_event_command(node_id, std::move(attr_paths), std::move(event_paths)) != ESP_OK &&
             !cJSON_GetObjectItemCaseSensitive(s_resp_root, "status")) {
         cJSON_AddStringToObject(s_resp_root, "status", "failure");
@@ -932,13 +1146,6 @@ esp_err_t app_rmaker_matter_cmd_resp_enable(void)
         s_cmd_resp_mutex = xSemaphoreCreateMutex();
         if (!s_cmd_resp_mutex) {
             ESP_LOGE(TAG, "Failed to allocate command response mutex");
-            return ESP_ERR_NO_MEM;
-        }
-    }
-    if (s_matter_controller_event_group == nullptr) {
-        s_matter_controller_event_group = xEventGroupCreate();
-        if (!s_matter_controller_event_group) {
-            ESP_LOGE(TAG, "Failed to allocate controller event group");
             return ESP_ERR_NO_MEM;
         }
     }
@@ -984,10 +1191,6 @@ clear:
         } else if (s_cmd_resp_buffer) {
             free(s_cmd_resp_buffer);
             s_cmd_resp_buffer = nullptr;
-        }
-        if (!any_registered && s_matter_controller_event_group) {
-            vEventGroupDelete(s_matter_controller_event_group);
-            s_matter_controller_event_group = NULL;
         }
         if (!any_registered && s_cmd_resp_mutex) {
             vSemaphoreDelete(s_cmd_resp_mutex);

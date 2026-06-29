@@ -100,12 +100,6 @@ menu "ESP RainMaker Matter Controller"
             help
                 Set the token refill interval used to bound sustained RainMaker attribute report publish rate.
 
-        config RMAKER_MTCTL_REPORT_MAX_REMOVED_PER_UPDATE
-            int "ESP Rainmaker Matter Controller Report Max Removed Nodes Per Update"
-            default 32
-            help
-                Set the maximum removed-node report records processed per device-list update.
-
         config RMAKER_MTCTL_REPORT_SUBSCRIBE_TIMEOUT_MS
             int "ESP Rainmaker Matter Controller Report Subscribe Timeout (ms)"
             default 30000

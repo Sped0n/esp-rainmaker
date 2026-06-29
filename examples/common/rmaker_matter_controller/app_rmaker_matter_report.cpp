@@ -20,6 +20,7 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <algorithm>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,25 +38,22 @@
 #define MATTER_REPORT_TASK_PRIO                 5
 #define MATTER_REPORT_INITIAL_SUBSCRIBE_PACE_MS 2000u
 
+constexpr size_t kMaxTrackedNodes = std::min({
+    static_cast<size_t>(CONFIG_RMAKER_MTCTL_MAX_DEVICE_COUNT),
+    static_cast<size_t>(CHIP_CONFIG_CONTROLLER_MAX_ACTIVE_DEVICES),
+    static_cast<size_t>(CHIP_CONFIG_MAX_EXCHANGE_CONTEXTS),
+    static_cast<size_t>(CHIP_CONFIG_SECURE_SESSION_POOL_SIZE),
+});
+
 static_assert(CONFIG_RMAKER_MTCTL_REPORT_QUEUE_SIZE > 0,
               "CONFIG_RMAKER_MTCTL_REPORT_QUEUE_SIZE must be greater than 0");
 static_assert(CONFIG_RMAKER_MTCTL_REPORT_ATTR_BUCKET_CAPACITY > 0,
               "CONFIG_RMAKER_MTCTL_REPORT_ATTR_BUCKET_CAPACITY must be greater than 0");
 static_assert(CONFIG_RMAKER_MTCTL_REPORT_ATTR_BUCKET_REFILL_MS > 0,
               "CONFIG_RMAKER_MTCTL_REPORT_ATTR_BUCKET_REFILL_MS must be greater than 0");
-static_assert(CONFIG_RMAKER_MTCTL_REPORT_MAX_REMOVED_PER_UPDATE > 0,
-              "CONFIG_RMAKER_MTCTL_REPORT_MAX_REMOVED_PER_UPDATE must be greater than 0");
 static_assert(CONFIG_RMAKER_MTCTL_REPORT_SUBSCRIBE_TIMEOUT_MS > 0,
               "CONFIG_RMAKER_MTCTL_REPORT_SUBSCRIBE_TIMEOUT_MS must be greater than 0");
-static_assert(CHIP_CONFIG_CONTROLLER_MAX_ACTIVE_DEVICES > CONFIG_RMAKER_MTCTL_MAX_DEVICE_COUNT,
-              "CHIP_CONFIG_CONTROLLER_MAX_ACTIVE_DEVICES must be greater than "
-              "CONFIG_RMAKER_MTCTL_MAX_DEVICE_COUNT");
-static_assert(CHIP_CONFIG_MAX_EXCHANGE_CONTEXTS > CONFIG_RMAKER_MTCTL_MAX_DEVICE_COUNT,
-              "CHIP_CONFIG_MAX_EXCHANGE_CONTEXTS must be greater than "
-              "CONFIG_RMAKER_MTCTL_MAX_DEVICE_COUNT");
-static_assert(CHIP_CONFIG_SECURE_SESSION_POOL_SIZE > CONFIG_RMAKER_MTCTL_MAX_DEVICE_COUNT,
-              "CHIP_CONFIG_SECURE_SESSION_POOL_SIZE must be greater than "
-              "CONFIG_RMAKER_MTCTL_MAX_DEVICE_COUNT");
+static_assert(kMaxTrackedNodes > 0, "Matter controller must track at least one node");
 
 QueueHandle_t s_report_queue = NULL;
 static TaskHandle_t s_report_task = NULL;
@@ -442,9 +440,9 @@ esp_err_t app_rmaker_matter_report_on_device_list_update(const matter_device_t *
         return ret;
     }
     typedef struct {
-        uint64_t removed_node_ids[CONFIG_RMAKER_MTCTL_REPORT_MAX_REMOVED_PER_UPDATE];
-        cJSON *removed_pending[CONFIG_RMAKER_MTCTL_REPORT_MAX_REMOVED_PER_UPDATE];
-        uint64_t new_node_ids[CHIP_CONFIG_CONTROLLER_MAX_ACTIVE_DEVICES];
+        uint64_t removed_node_ids[kMaxTrackedNodes];
+        cJSON *removed_pending[kMaxTrackedNodes];
+        uint64_t new_node_ids[kMaxTrackedNodes];
     } update_work_t;
 #if CONFIG_RMAKER_MTCTL_MEMORY_ALLOCATION_PREFER_SPIRAM
     update_work_t *work = (update_work_t *)heap_caps_calloc_prefer(1, sizeof(*work), 2,
@@ -484,17 +482,11 @@ esp_err_t app_rmaker_matter_report_on_device_list_update(const matter_device_t *
                 } else {
                     s_node_states = next;
                 }
-                if (removed_count < CONFIG_RMAKER_MTCTL_REPORT_MAX_REMOVED_PER_UPDATE) {
-                    work->removed_pending[removed_count] = app_rmaker_matter_report_flush_pending_node_locked(node_id,
-                                                                                                              true);
-                    cJSON_Delete(app_rmaker_matter_report_json_detach_pending_node(&s_ingress_attr_delta, node_id));
-                    work->removed_node_ids[removed_count++] = node_id;
-                    free_node_state(n);
-                } else {
-                    ESP_LOGW(TAG, "Removed node backlog > %d; call shutdown manually for 0x%llX",
-                             CONFIG_RMAKER_MTCTL_REPORT_MAX_REMOVED_PER_UPDATE, (unsigned long long)node_id);
-                    free_node_state(n);
-                }
+                work->removed_pending[removed_count] = app_rmaker_matter_report_flush_pending_node_locked(node_id,
+                                                                                                          true);
+                cJSON_Delete(app_rmaker_matter_report_json_detach_pending_node(&s_ingress_attr_delta, node_id));
+                work->removed_node_ids[removed_count++] = node_id;
+                free_node_state(n);
                 n = next;
                 continue;
             }
@@ -504,14 +496,12 @@ esp_err_t app_rmaker_matter_report_on_device_list_update(const matter_device_t *
 
         /* Subscribe to nodes in the list that we don't have yet */
         size_t subscribed_count = 0;
-        size_t limit = CHIP_CONFIG_CONTROLLER_MAX_ACTIVE_DEVICES < CONFIG_MAX_EXCHANGE_CONTEXTS ?
-                       CHIP_CONFIG_CONTROLLER_MAX_ACTIVE_DEVICES : CONFIG_MAX_EXCHANGE_CONTEXTS;
         for (const matter_device_t *d = dev_list; d != NULL; d = d->next) {
             if (app_rmaker_matter_report_find_node(d->node_id)) {
                 subscribed_count++;
                 continue;
             }
-            if (subscribed_count < limit) {
+            if (subscribed_count < kMaxTrackedNodes) {
                 node_state_t *ns = create_node_state(d->node_id, d->rainmaker_node_id);
                 if (ns) {
                     ns->next = s_node_states;
@@ -525,7 +515,7 @@ esp_err_t app_rmaker_matter_report_on_device_list_update(const matter_device_t *
                 }
             } else {
                 ESP_LOGW(TAG, "Skip attr subscription for 0x%llX: node subscription limit %u reached",
-                         (unsigned long long)d->node_id, (unsigned)limit);
+                         (unsigned long long)d->node_id, (unsigned)kMaxTrackedNodes);
             }
         }
 
