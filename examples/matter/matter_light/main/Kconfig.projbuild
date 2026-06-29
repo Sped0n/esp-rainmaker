@@ -1,5 +1,13 @@
 menu "Example Config"
-    
+
+    config APP_LIGHT_LED_WS2812_GPIO
+        int "WS2812 LED GPIO"
+        default 8 if IDF_TARGET_ESP32C2 || IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C6 || IDF_TARGET_ESP32H2
+        default 48 if IDF_TARGET_ESP32S3
+        default 18
+        help
+            GPIO number for the WS2812 RGB LED.
+     
     config EXAMPLE_USE_RAINMAKER_FABRIC
         bool "Use RainMaker plus Matter fabric solution"
         default y

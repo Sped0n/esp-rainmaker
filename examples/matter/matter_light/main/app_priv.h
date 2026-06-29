@@ -27,6 +27,9 @@
 #define MATTER_SATURATION 255
 #define MATTER_TEMPERATURE_FACTOR 1000000
 
+#define REMAP_TO_RANGE(value, from, to) ((value * to) / from)
+#define REMAP_TO_RANGE_INVERSE(value, factor) (factor / (value ? value : 1))
+
 /** Default attribute values used by Rainmaker during initialization */
 #define LIGHT_DEVICE_NAME "Matter Light"
 #define DEFAULT_POWER true

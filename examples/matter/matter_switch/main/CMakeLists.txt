@@ -1,6 +1,6 @@
-set(PRIV_REQUIRES_LIST device esp_matter esp_matter_console esp_matter_rainmaker app_reset app_matter)
+set(PRIV_REQUIRES_LIST rmaker_app_reset app_end_device)
 
-idf_component_register(SRCS         ./app_main.cpp ./app_matter_switch.cpp ./app_driver.cpp
+idf_component_register(SRCS         ./app_main.cpp ./app_matter_switch.cpp ./app_driver.cpp ../../common/app_end_device/led_driver_gpio.c
                       PRIV_INCLUDE_DIRS  "."
                       PRIV_REQUIRES      ${PRIV_REQUIRES_LIST})
 

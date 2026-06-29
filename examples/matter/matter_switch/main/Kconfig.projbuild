@@ -1,0 +1,11 @@
+menu "Example Config"
+
+    config APP_SWITCH_LED_GPIO
+        int "Switch LED GPIO"
+        default 5 if IDF_TARGET_ESP32
+        default 38 if IDF_TARGET_ESP32S3
+        default 8
+        help
+            GPIO number for the switch LED.
+
+endmenu

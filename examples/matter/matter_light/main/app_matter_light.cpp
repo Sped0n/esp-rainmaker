@@ -23,8 +23,7 @@
 #include <esp_rmaker_standard_params.h>
 #include <esp_rmaker_core.h>
 #include "app_priv.h"
-#include <app_matter.h>
-#include <utils/common_macros.h>
+#include <app_end_device.h>
 #ifndef CONFIG_EXAMPLE_USE_RAINMAKER_FABRIC
 #include <matter_commissioning_window_management.h>
 #include <protocomm_matter_ble.h>
