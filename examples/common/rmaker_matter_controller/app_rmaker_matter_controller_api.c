@@ -9,16 +9,20 @@
 #include <esp_err.h>
 #include <esp_rmaker_core.h>
 #include <esp_rmaker_utils.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/pem.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "app_rmaker_matter_controller.h"
 #include "app_rmaker_matter_controller_api.h"
+#include "app_rmaker_matter_controller_internal.h"
+#include "app_rmaker_matter_controller_service.h"
 
 #define TAG "rmaker_matter_controller_api"
-#define RAINMAKER_URL_LEN 256
 
 #ifdef CONFIG_RM_USER_SUPPORT_REUSE_HTTP_SESSION
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
@@ -26,10 +30,10 @@
 #endif
 #endif
 
-// ==================== Matter Controller APIs ====================
-
 #define PEM_BEGIN_CSR "-----BEGIN CERTIFICATE REQUEST-----\n"
 #define PEM_END_CSR "-----END CERTIFICATE REQUEST-----\n"
+
+// ==================== Matter Controller APIs ====================
 
 /**
  * @brief Convert character to hex digit
@@ -151,12 +155,18 @@ static esp_err_t convert_pem_to_der(const char *pem, uint8_t *der_buf, size_t *d
     }
     const char *end = pem + pem_len;
     s1 += 10;
-    while (s1 < end && *s1 != '-') s1++;
-    while (s1 < end && *s1 == '-') s1++;
-    if (*s1 == '\r')
+    while (s1 < end && *s1 != '-') {
         s1++;
-    if (*s1 == '\n')
+    }
+    while (s1 < end && *s1 == '-') {
         s1++;
+    }
+    if (*s1 == '\r') {
+        s1++;
+    }
+    if (*s1 == '\n') {
+        s1++;
+    }
 
     size_t len = 0;
     int ret = mbedtls_base64_decode(NULL, 0, &len, (const unsigned char *)s1, s2 - s1);
@@ -171,6 +181,34 @@ static esp_err_t convert_pem_to_der(const char *pem, uint8_t *der_buf, size_t *d
     }
     *der_len = len;
     return ESP_OK;
+}
+
+/**
+ * @brief Execute a RainMaker user API request with configurable retry/backoff.
+ */
+static esp_err_t execute_api_with_retry(app_rmaker_user_api_request_config_t *request_config, int *status_code,
+                                        char **response_data, const char *fetch_name)
+{
+    esp_err_t ret = ESP_OK;
+    const int retry_count = CONFIG_RMAKER_MTCTL_FETCH_RETRY_COUNT > 0 ? CONFIG_RMAKER_MTCTL_FETCH_RETRY_COUNT : 0;
+    const int retry_backoff_sec = CONFIG_RMAKER_MTCTL_FETCH_RETRY_BACKOFF_SEC > 0 ?
+                                  CONFIG_RMAKER_MTCTL_FETCH_RETRY_BACKOFF_SEC : 0;
+    for (int attempt = 0; attempt <= retry_count; attempt++) {
+        ret = app_rmaker_user_api_generic(request_config, status_code, response_data);
+        if (ret == ESP_OK) {
+            return ESP_OK;
+        }
+        free(*response_data);
+        *response_data = NULL;
+        if (attempt < retry_count) {
+            ESP_LOGW(TAG, "%s fetch failed: %s; retrying (%d/%d)", fetch_name ? fetch_name : "Matter controller API",
+                     esp_err_to_name(ret), attempt + 1, retry_count);
+            if (retry_backoff_sec > 0) {
+                vTaskDelay(pdMS_TO_TICKS(retry_backoff_sec * 1000));
+            }
+        }
+    }
+    return ret;
 }
 
 // /v1/user/node_group - Get group ID by fabric ID
@@ -197,7 +235,7 @@ esp_err_t app_rmaker_api_get_group_id_by_fabric(uint64_t fabric_id, char *group_
 
     char *response_data = NULL;
     int status_code = 0;
-    esp_err_t err = app_rmaker_user_api_generic(&request_config, &status_code, &response_data);
+    esp_err_t err = execute_api_with_retry(&request_config, &status_code, &response_data, "Matter controller API");
     if (err != ESP_OK) {
         free(response_data);
         return err;
@@ -241,7 +279,7 @@ esp_err_t app_rmaker_api_get_matter_fabric_id(const char *group_id, uint64_t *fa
         return ESP_ERR_INVALID_ARG;
     }
 
-    char query_parameters[RAINMAKER_URL_LEN] = {0};
+    char query_parameters[CONFIG_RMAKER_MTCTL_API_URL_LEN] = {0};
     snprintf(query_parameters, sizeof(query_parameters),
              "group_id=%s&node_list=false&sub_groups=false&node_details=false&is_matter=true&fabric_details=false",
              group_id);
@@ -261,7 +299,7 @@ esp_err_t app_rmaker_api_get_matter_fabric_id(const char *group_id, uint64_t *fa
 
     char *response_data = NULL;
     int status_code = 0;
-    esp_err_t err = app_rmaker_user_api_generic(&request_config, &status_code, &response_data);
+    esp_err_t err = execute_api_with_retry(&request_config, &status_code, &response_data, "Matter controller API");
     if (err != ESP_OK) {
         free(response_data);
         return err;
@@ -297,7 +335,7 @@ esp_err_t app_rmaker_api_get_fabric_rcac(const char *group_id, unsigned char *rc
         return ESP_ERR_INVALID_ARG;
     }
 
-    char query_parameters[RAINMAKER_URL_LEN] = {0};
+    char query_parameters[CONFIG_RMAKER_MTCTL_API_URL_LEN] = {0};
     snprintf(query_parameters, sizeof(query_parameters),
              "group_id=%s&node_list=false&sub_groups=false&node_details=false&is_matter=true&fabric_details=true",
              group_id);
@@ -317,7 +355,7 @@ esp_err_t app_rmaker_api_get_fabric_rcac(const char *group_id, unsigned char *rc
 
     char *response_data = NULL;
     int status_code = 0;
-    esp_err_t err = app_rmaker_user_api_generic(&request_config, &status_code, &response_data);
+    esp_err_t err = execute_api_with_retry(&request_config, &status_code, &response_data, "Matter controller API");
     if (err != ESP_OK) {
         free(response_data);
         return err;
@@ -357,7 +395,7 @@ esp_err_t app_rmaker_api_get_fabric_ipk(const char *group_id, uint8_t *ipk_buf, 
         return ESP_ERR_INVALID_ARG;
     }
 
-    char query_parameters[RAINMAKER_URL_LEN] = {0};
+    char query_parameters[CONFIG_RMAKER_MTCTL_API_URL_LEN] = {0};
     snprintf(query_parameters, sizeof(query_parameters),
              "group_id=%s&node_list=false&sub_groups=false&node_details=false&is_matter=true&fabric_details=true",
              group_id);
@@ -377,7 +415,7 @@ esp_err_t app_rmaker_api_get_fabric_ipk(const char *group_id, uint8_t *ipk_buf, 
 
     char *response_data = NULL;
     int status_code = 0;
-    esp_err_t err = app_rmaker_user_api_generic(&request_config, &status_code, &response_data);
+    esp_err_t err = execute_api_with_retry(&request_config, &status_code, &response_data, "Matter controller API");
     if (err != ESP_OK) {
         free(response_data);
         return err;
@@ -475,7 +513,7 @@ esp_err_t app_rmaker_api_issue_noc(const uint8_t *csr_der, size_t csr_der_len, c
 
     char *response_data = NULL;
     int status_code = 0;
-    err = app_rmaker_user_api_generic(&request_config, &status_code, &response_data);
+    err = execute_api_with_retry(&request_config, &status_code, &response_data, "Matter controller API");
     free(payload);
     if (err != ESP_OK) {
         free(response_data);
@@ -542,7 +580,7 @@ esp_err_t app_rmaker_api_create_matter_controller(const char *rainmaker_node_id,
 
     char *response_data = NULL;
     int status_code = 0;
-    esp_err_t err = app_rmaker_user_api_generic(&request_config, &status_code, &response_data);
+    esp_err_t err = execute_api_with_retry(&request_config, &status_code, &response_data, "Matter controller API");
     free(payload);
     if (err != ESP_OK) {
         free(response_data);
@@ -570,10 +608,10 @@ esp_err_t app_rmaker_api_create_matter_controller(const char *rainmaker_node_id,
 
 static esp_err_t fetch_matter_node_list(const char *group_id, matter_device_t **device_list)
 {
-    char query_parameters[RAINMAKER_URL_LEN] = {0};
+    char query_parameters[CONFIG_RMAKER_MTCTL_API_URL_LEN] = {0};
     snprintf(query_parameters, sizeof(query_parameters),
-             "group_id=%s&node_details=false&sub_groups=false&node_list=true&is_matter=true&matter_node_list=true",
-             group_id);
+             "group_id=%s&node_details=false&sub_groups=false&node_list=true&is_matter=true&matter_node_list=true&num_records=%d",
+             group_id, CONFIG_RMAKER_MTCTL_MAX_DEVICE_COUNT);
 
     app_rmaker_user_api_request_config_t request_config = {
 #ifdef MATTER_CONTROLLER_REUSE_SESSION
@@ -590,7 +628,7 @@ static esp_err_t fetch_matter_node_list(const char *group_id, matter_device_t **
 
     char *response_data = NULL;
     int status_code = 0;
-    esp_err_t err = app_rmaker_user_api_generic(&request_config, &status_code, &response_data);
+    esp_err_t err = execute_api_with_retry(&request_config, &status_code, &response_data, "Matter device-list");
     if (err != ESP_OK) {
         free(response_data);
         return err;
@@ -604,6 +642,8 @@ static esp_err_t fetch_matter_node_list(const char *group_id, matter_device_t **
 
     matter_device_t *list_head = NULL;
     char *self_node_id = esp_rmaker_get_node_id();
+    size_t accepted_nodes = 0;
+    size_t skipped_nodes = 0;
     cJSON *groups = cJSON_GetObjectItem(response, "groups");
     if (groups && cJSON_IsArray(groups) && cJSON_GetArraySize(groups) > 0) {
         cJSON *group = cJSON_GetArrayItem(groups, 0);
@@ -615,7 +655,11 @@ static esp_err_t fetch_matter_node_list(const char *group_id, matter_device_t **
                 cJSON *id = cJSON_GetObjectItem(node, "id");
                 cJSON *matter_id = cJSON_GetObjectItem(node, "matter_node_id");
                 if (id && id->valuestring && strncmp(id->valuestring, self_node_id, strlen(self_node_id)) != 0 &&
-                    matter_id && matter_id->valuestring) {
+                        matter_id && matter_id->valuestring) {
+                    if (accepted_nodes >= CONFIG_RMAKER_MTCTL_MAX_DEVICE_COUNT) {
+                        skipped_nodes++;
+                        continue;
+                    }
                     matter_device_t *dev = (matter_device_t *)MEM_CALLOC_EXTRAM(1, sizeof(matter_device_t));
                     if (dev) {
                         strncpy(dev->rainmaker_node_id, id->valuestring, ESP_RAINMAKER_NODE_ID_MAX_LEN - 1);
@@ -623,10 +667,14 @@ static esp_err_t fetch_matter_node_list(const char *group_id, matter_device_t **
                         dev->node_id = convert_hex_string_to_uint64(matter_id->valuestring);
                         dev->next = list_head;
                         list_head = dev;
+                        accepted_nodes++;
                     }
                 }
             }
         }
+    }
+    if (skipped_nodes > 0) {
+        ESP_LOGW(TAG, "Matter device-list cap: using first %zu nodes, skipping %zu", accepted_nodes, skipped_nodes);
     }
     cJSON_Delete(response);
     *device_list = list_head;
@@ -668,7 +716,7 @@ static bool parse_device_type_cjson(cJSON *device_type, endpoint_entry_t *entry)
 
 /**
  * @brief Parse Matter endpoints from metadata
- * 
+ *
  */
 static void parse_matter_endpoints(cJSON *endpoints_data, matter_device_t *device, cJSON *fallback_device_type)
 {
@@ -685,7 +733,7 @@ static void parse_matter_endpoints(cJSON *endpoints_data, matter_device_t *devic
         endpoint_entry_t entry = {0};
         cJSON *device_type = cJSON_GetObjectItem(ep, "deviceType");
         if (!parse_device_type_cjson(device_type, &entry) &&
-            !parse_device_type_cjson(fallback_device_type, &entry)) {
+                !parse_device_type_cjson(fallback_device_type, &entry)) {
             ESP_LOGW(TAG, "Missing deviceType for endpoint %d, skipping", ep_id);
             continue;
         }
@@ -708,9 +756,9 @@ static esp_err_t fetch_matter_node_metadata(matter_device_t *device)
         return ESP_ERR_INVALID_ARG;
     }
 
-    char query_parameters[RAINMAKER_URL_LEN] = {0};
+    char query_parameters[CONFIG_RMAKER_MTCTL_API_URL_LEN] = {0};
     snprintf(query_parameters, sizeof(query_parameters),
-             "node_id=%s&node_details=true&status=true&config=false&params=false&is_matter=true",
+             "node_id=%s&node_details=true&status=false&config=false&params=false&is_matter=true",
              device->rainmaker_node_id);
 
     app_rmaker_user_api_request_config_t request_config = {
@@ -728,12 +776,24 @@ static esp_err_t fetch_matter_node_metadata(matter_device_t *device)
 
     char *response_data = NULL;
     int status_code = 0;
-    esp_err_t err = app_rmaker_user_api_generic(&request_config, &status_code, &response_data);
+    esp_err_t err = execute_api_with_retry(&request_config, &status_code, &response_data, "Matter metadata");
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Metadata fetch API failed for rainmaker_node_id=%s matter_node=0x%08" PRIx32 "%08" PRIx32
+                 " err=%s status=%d", device->rainmaker_node_id, (uint32_t)(device->node_id >> 32),
+                 (uint32_t)(device->node_id & 0xFFFFFFFF), esp_err_to_name(err), status_code);
         free(response_data);
         return err;
     }
+    if (status_code != 200) {
+        ESP_LOGW(TAG, "Metadata fetch returned status=%d for rainmaker_node_id=%s", status_code,
+                 device->rainmaker_node_id);
+        free(response_data);
+        return ESP_FAIL;
+    }
     cJSON *response = cJSON_Parse(response_data);
+    if (!response) {
+        ESP_LOGE(TAG, "Metadata response JSON parse failed for rainmaker_node_id=%s", device->rainmaker_node_id);
+    }
     free(response_data);
 
     if (!response) {
@@ -742,18 +802,12 @@ static esp_err_t fetch_matter_node_metadata(matter_device_t *device)
 
     err = ESP_FAIL;
     cJSON *nodes = cJSON_GetObjectItem(response, "node_details");
-    if (nodes && cJSON_IsArray(nodes) && cJSON_GetArraySize(nodes) == 1) {
+    int node_count = (nodes && cJSON_IsArray(nodes)) ? cJSON_GetArraySize(nodes) : -1;
+    if (!nodes || !cJSON_IsArray(nodes) || node_count != 1) {
+        ESP_LOGE(TAG, "Unexpected metadata response shape for rainmaker_node_id=%s: node_details_is_array=%d count=%d",
+                 device->rainmaker_node_id, nodes && cJSON_IsArray(nodes), node_count);
+    } else {
         cJSON *node = cJSON_GetArrayItem(nodes, 0);
-        cJSON *status = cJSON_GetObjectItem(node, "status");
-        if (status) {
-            cJSON *connectivity = cJSON_GetObjectItem(status, "connectivity");
-            if (connectivity) {
-                cJSON *connected = cJSON_GetObjectItem(connectivity, "connected");
-                if (connected && cJSON_IsBool(connected)) {
-                    device->reachable = connected->valueint;
-                }
-            }
-        }
         cJSON *metadata = cJSON_GetObjectItem(node, "metadata");
         if (metadata) {
             cJSON *matter = cJSON_GetObjectItem(metadata, "Matter");
@@ -775,9 +829,14 @@ static esp_err_t fetch_matter_node_metadata(matter_device_t *device)
                 if (is_rainmaker && cJSON_IsBool(is_rainmaker)) {
                     device->is_rainmaker_device = is_rainmaker->valueint;
                 }
+            } else {
+                ESP_LOGW(TAG, "Metadata has no Matter object for rainmaker_node_id=%s", device->rainmaker_node_id);
             }
-            device->is_metadata_fetched = true;
+        } else {
+            ESP_LOGW(TAG, "Metadata response has no metadata object for rainmaker_node_id=%s", device->rainmaker_node_id);
         }
+        ESP_LOGI(TAG, "Parsed metadata rainmaker_node_id=%s rainmaker=%d endpoint_count=%u name=%s",
+                 device->rainmaker_node_id, device->is_rainmaker_device, device->endpoint_count, device->device_name);
         err = ESP_OK;
     }
     cJSON_Delete(response);
@@ -797,7 +856,11 @@ esp_err_t app_rmaker_api_get_matter_device_list(const char *group_id, matter_dev
 
     if (*device_list) {
         matter_device_t *dev = *device_list;
+        matter_device_t *prev = NULL;
+        size_t fetched_count = 0;
+        size_t skipped_empty_count = 0;
         while (dev) {
+            matter_device_t *next = dev->next;
             esp_err_t err = fetch_matter_node_metadata(dev);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to fetch metadata for Matter Node 0x%08" PRIx32 "%08" PRIx32,
@@ -806,8 +869,26 @@ esp_err_t app_rmaker_api_get_matter_device_list(const char *group_id, matter_dev
                 *device_list = NULL;
                 return err;
             }
-            dev = dev->next;
+            if (dev->endpoint_count == 0) {
+                ESP_LOGI(TAG, "Skipping Matter node 0x%08" PRIx32 "%08" PRIx32
+                         ": no non-root endpoints in metadata",
+                         (uint32_t)(dev->node_id >> 32), (uint32_t)(dev->node_id & 0xFFFFFFFF));
+                if (prev) {
+                    prev->next = next;
+                } else {
+                    *device_list = next;
+                }
+                free(dev);
+                skipped_empty_count++;
+                dev = next;
+                continue;
+            }
+            fetched_count++;
+            prev = dev;
+            dev = next;
         }
+        ESP_LOGI(TAG, "Matter metadata: fetched=%u skipped_empty=%u", (unsigned)fetched_count,
+                 (unsigned)skipped_empty_count);
     }
     return ESP_OK;
 }

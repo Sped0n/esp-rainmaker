@@ -14,10 +14,10 @@
 extern "C" {
 #endif
 
-#define ESP_MATTER_DEVICE_MAX_ENDPOINT CONFIG_RAINMAKER_MATTER_CONTROLLER_MAX_ENDPOINT_COUNT_PER_DEVICE
-#define ESP_MATTER_DEVICE_MAX_DEVICE_TYPE CONFIG_RAINMAKER_MATTER_CONTROLLER_MAX_DEVICE_TYPE_COUNT_PER_ENDPOINT
-#define ESP_MATTER_DEVICE_NAME_MAX_LEN 32
-#define ESP_RAINMAKER_NODE_ID_MAX_LEN 36
+#define ESP_MATTER_DEVICE_MAX_ENDPOINT CONFIG_RMAKER_MTCTL_MAX_ENDPOINT_COUNT_PER_DEVICE
+#define ESP_MATTER_DEVICE_MAX_DEVICE_TYPE CONFIG_RMAKER_MTCTL_MAX_DEVICE_TYPE_COUNT_PER_ENDPOINT
+#define ESP_MATTER_DEVICE_NAME_MAX_LEN CONFIG_RMAKER_MTCTL_DEVICE_NAME_MAX_LEN
+#define ESP_RAINMAKER_NODE_ID_MAX_LEN CONFIG_RMAKER_MTCTL_RMAKER_NODE_ID_MAX_LEN
 #define ESP_MATTER_IPK_LEN 16
 
 typedef struct endpoint_entry {
@@ -30,9 +30,7 @@ typedef struct matter_device {
     uint64_t node_id;
     char device_name[ESP_MATTER_DEVICE_NAME_MAX_LEN];
     char rainmaker_node_id[ESP_RAINMAKER_NODE_ID_MAX_LEN];
-    bool reachable;
     bool is_rainmaker_device;
-    bool is_metadata_fetched;
     uint8_t endpoint_count;
     endpoint_entry_t endpoints[ESP_MATTER_DEVICE_MAX_ENDPOINT];
     struct matter_device *next;
@@ -41,7 +39,8 @@ typedef struct matter_device {
 /**
  * @brief Check whether the controller has enough state to update the Matter device list.
  *
- * @return true if the base URL, user token, group id, authorization, and controller setup are ready.
+ * @return true if the base URL, user token, group id, authorization, and controller setup are ready
+ * @return false if any required controller state is missing
  */
 bool app_rmaker_matter_device_list_updatable(void);
 
@@ -50,23 +49,35 @@ bool app_rmaker_matter_device_list_updatable(void);
  *
  * The fetched list is passed to matter_controller_device_list_update_callback_t as a temporary read-only list. The
  * callback must copy it if it needs to keep it after returning.
+ *
+ * @return ESP_OK on success
+ * @return error in case of failure
  */
 esp_err_t app_rmaker_matter_device_list_update(void);
 
 /**
  * @brief Deep-copy a Matter device list.
  *
- * The returned list uses PSRAM when CONFIG_RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL is enabled.
+ * The returned list prefers PSRAM when CONFIG_RMAKER_MTCTL_MEMORY_ALLOCATION_PREFER_SPIRAM is enabled.
+ *
+ * @param[in] src_dev_list The Matter device list to copy
+ *
+ * @return Copied Matter device list on success
+ * @return NULL if allocation failed or src_dev_list is NULL
  */
 matter_device_t *app_rmaker_device_list_copy_create(const matter_device_t *src_dev_list);
 
 /**
  * @brief Destroy a list returned by app_rmaker_device_list_copy_create() or fetched by the controller API.
+ *
+ * @param[in] dev_list The Matter device list to destroy
  */
 void app_rmaker_device_list_copy_destroy(matter_device_t *dev_list);
 
 /**
  * @brief Print a Matter device list.
+ *
+ * @param[in] dev_list The Matter device list to print
  */
 void app_rmaker_device_list_print(const matter_device_t *dev_list);
 

@@ -12,7 +12,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "app_rmaker_matter_attr_report.h"
+#include "app_rmaker_matter_report.h"
 #include "app_rmaker_matter_controller_api.h"
 #include "app_rmaker_matter_device_list.h"
 
@@ -25,8 +25,8 @@ typedef esp_err_t (*matter_controller_update_noc_callback_t)(uint64_t fabric_id)
 typedef void (*matter_controller_device_list_update_callback_t)(esp_err_t err, const matter_device_t *dev_list);
 
 typedef struct {
-    /* This callback is used to set up matter controller. Will be called in app_rmaker_matter_controller_handle_update()
-       if not setup yet and authorized successfully.
+    /* This callback is used to set up Matter controller. It is called automatically after the controller has enough
+       RainMaker auth/group state and is authorized successfully.
 
     1. For controller instance (client-only controller),
        The matter controller client setup related operations MUST be done in this callback. If the controller has not
@@ -63,16 +63,6 @@ typedef struct {
  * @return error in case of failure
  */
 esp_err_t app_rmaker_matter_controller_enable(matter_controller_config_t *config);
-
-/**
- * @brief Update the rainmaker matter controller handle and report the matter controller status to Rainmaker cloud.
- *
- * Should call this function after GOT_IP event.
- *
- * @return ESP_OK on success
- * @return error in case of failure
- */
-esp_err_t app_rmaker_matter_controller_handle_update();
 
 // TODO: Remove these storage APIs once the esp_matter component includes the commit
 // for setting up the controller with the stored fabric in the esp_matter component.

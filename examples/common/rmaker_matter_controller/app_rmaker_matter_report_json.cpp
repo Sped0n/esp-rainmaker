@@ -4,38 +4,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <app_rmaker_matter_attr_json.h>
+#include <app_rmaker_matter_report_json.h>
 
-#include <esp_check.h>
-#include <esp_log.h>
+#if CONFIG_RMAKER_MTCTL_MEMORY_ALLOCATION_PREFER_SPIRAM
+#include <esp_heap_caps.h>
+#endif
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define TAG "rmaker_matter_attr_json"
-
-#define MATTER_DEVICES_SCHEMA_REVISION 0U
-
-static esp_rmaker_param_t *s_attributes_param = NULL;
-static uint32_t s_last_report_hash = 0;
-static bool s_have_last_report_hash = false;
-
-static uint32_t hash_string(const char *str)
-{
-    uint32_t h = 5381;
-    if (!str) {
-        return 0;
-    }
-    while (*str) {
-        h = ((h << 5) + h) + (uint8_t)*str++;
-    }
-    return h;
-}
-
 static int cmp_cjson_object_entry(const void *a, const void *b)
 {
-    const cJSON *const *ja = (const cJSON *const *)a;
-    const cJSON *const *jb = (const cJSON *const *)b;
+    const cJSON *const *ja = (const cJSON * const *)a;
+    const cJSON *const *jb = (const cJSON * const *)b;
     const char *sa = (*ja)->string;
     const char *sb = (*jb)->string;
     if (!sa && !sb) {
@@ -50,7 +31,7 @@ static int cmp_cjson_object_entry(const void *a, const void *b)
     return strcmp(sa, sb);
 }
 
-static cJSON *cjson_canonicalize(const cJSON *item)
+cJSON *app_rmaker_matter_report_json_canonicalize(const cJSON *item)
 {
     if (!item) {
         return NULL;
@@ -63,7 +44,13 @@ static cJSON *cjson_canonicalize(const cJSON *item)
         if (count == 0) {
             return cJSON_CreateObject();
         }
+#if CONFIG_RMAKER_MTCTL_MEMORY_ALLOCATION_PREFER_SPIRAM
+        cJSON **entries = (cJSON **)heap_caps_calloc_prefer((size_t)count, sizeof(cJSON *), 2,
+                                                            MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM,
+                                                            MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL);
+#else
         cJSON **entries = (cJSON **)calloc((size_t)count, sizeof(cJSON *));
+#endif
         if (!entries) {
             return NULL;
         }
@@ -78,7 +65,7 @@ static cJSON *cjson_canonicalize(const cJSON *item)
             return NULL;
         }
         for (i = 0; i < count; i++) {
-            cJSON *child = cjson_canonicalize(entries[i]);
+            cJSON *child = app_rmaker_matter_report_json_canonicalize(entries[i]);
             if (!child) {
                 cJSON_Delete(out);
                 free(entries);
@@ -95,9 +82,8 @@ static cJSON *cjson_canonicalize(const cJSON *item)
             return NULL;
         }
         cJSON *c;
-        cJSON_ArrayForEach(c, item)
-        {
-            cJSON *child = cjson_canonicalize(c);
+        cJSON_ArrayForEach(c, item) {
+            cJSON *child = app_rmaker_matter_report_json_canonicalize(c);
             if (!child) {
                 cJSON_Delete(out);
                 return NULL;
@@ -174,8 +160,7 @@ static void cjson_hexify_matter_keys(cJSON *item)
         }
     } else if (cJSON_IsArray(item)) {
         cJSON *el = NULL;
-        cJSON_ArrayForEach(el, item)
-        {
+        cJSON_ArrayForEach(el, item) {
             cjson_hexify_matter_keys(el);
         }
     }
@@ -186,30 +171,21 @@ static bool cjson_items_equal_canonical(const cJSON *a, const cJSON *b)
     if (!a || !b) {
         return false;
     }
-    cJSON *ca = cjson_canonicalize(a);
-    cJSON *cb = cjson_canonicalize(b);
+    cJSON *ca = app_rmaker_matter_report_json_canonicalize(a);
+    cJSON *cb = app_rmaker_matter_report_json_canonicalize(b);
     if (!ca || !cb) {
         cJSON_Delete(ca);
         cJSON_Delete(cb);
         return false;
     }
-    char *sa = cJSON_PrintUnformatted(ca);
-    char *sb = cJSON_PrintUnformatted(cb);
+    bool eq = cJSON_Compare(ca, cb, true);
     cJSON_Delete(ca);
     cJSON_Delete(cb);
-    bool eq = (sa && sb && strcmp(sa, sb) == 0);
-    cJSON_free(sa);
-    cJSON_free(sb);
     return eq;
 }
 
-void app_rmaker_matter_attr_json_set_param(esp_rmaker_param_t *matter_devices_param)
-{
-    s_attributes_param = matter_devices_param;
-}
-
-bool app_rmaker_matter_attr_json_update_tree(cJSON *root, uint16_t endpoint_id, uint32_t cluster_id,
-                                             uint32_t attribute_id, const char *value)
+bool app_rmaker_matter_report_json_update_tree_item(cJSON *root, uint16_t endpoint_id, uint32_t cluster_id,
+                                                  uint32_t attribute_id, const cJSON *value)
 {
     strip_legacy_attr_root(root);
 
@@ -261,89 +237,140 @@ bool app_rmaker_matter_attr_json_update_tree(cJSON *root, uint16_t endpoint_id, 
         cJSON_AddItemToObject(cluster_wrap, "attributes", attr_obj);
     }
 
-    cJSON *old = cJSON_DetachItemFromObject(attr_obj, attr_key);
-    cJSON *new_item = NULL;
-    if (value && value[0] != '\0') {
-        new_item = cJSON_Parse(value);
-    }
-    if (new_item) {
-        cjson_hexify_matter_keys(new_item);
-    } else {
-        new_item = cJSON_CreateString(value ? value : "");
-    }
+    cJSON *old_item = cJSON_DetachItemFromObject(attr_obj, attr_key);
+    cJSON *new_item = value ? cJSON_Duplicate(value, true) : cJSON_CreateNull();
     if (!new_item) {
-        if (old) {
-            cJSON_AddItemToObject(attr_obj, attr_key, old);
+        if (old_item) {
+            cJSON_AddItemToObject(attr_obj, attr_key, old_item);
         }
         return false;
     }
+    cjson_hexify_matter_keys(new_item);
 
-    bool changed = !old || !cjson_items_equal_canonical(old, new_item);
+    bool changed = !old_item || !cjson_items_equal_canonical(old_item, new_item);
     if (!changed) {
         cJSON_Delete(new_item);
-        cJSON_AddItemToObject(attr_obj, attr_key, old);
+        cJSON_AddItemToObject(attr_obj, attr_key, old_item);
         return false;
     }
 
-    cJSON_Delete(old);
+    cJSON_Delete(old_item);
     cJSON_AddItemToObject(attr_obj, attr_key, new_item);
     return true;
 }
 
-void app_rmaker_matter_attr_json_publish_matter_devices_delta(cJSON *matter_devices_obj)
+bool app_rmaker_matter_report_json_update_tree(cJSON *root, uint16_t endpoint_id, uint32_t cluster_id,
+                                              uint32_t attribute_id, const char *value)
 {
-    if (!s_attributes_param) {
-        cJSON_Delete(matter_devices_obj);
-        return;
+    cJSON *value_item = NULL;
+    if (value && value[0] != '\0') {
+        value_item = cJSON_Parse(value);
     }
-    if (!matter_devices_obj) {
-        return;
+    if (!value_item) {
+        value_item = cJSON_CreateString(value ? value : "");
     }
-    cJSON_DeleteItemFromObject(matter_devices_obj, "revision");
-    if (!cJSON_AddNumberToObject(matter_devices_obj, "revision", MATTER_DEVICES_SCHEMA_REVISION)) {
-        cJSON_Delete(matter_devices_obj);
-        return;
+    if (!value_item) {
+        return false;
     }
-
-    cJSON *canonical = cjson_canonicalize(matter_devices_obj);
-    cJSON_Delete(matter_devices_obj);
-    if (!canonical) {
-        return;
-    }
-    char *payload = cJSON_PrintUnformatted(canonical);
-    cJSON_Delete(canonical);
-    if (!payload) {
-        return;
-    }
-
-    uint32_t h = hash_string(payload);
-    if (s_have_last_report_hash && h == s_last_report_hash) {
-        cJSON_free(payload);
-        return;
-    }
-    s_last_report_hash = h;
-    s_have_last_report_hash = true;
-
-    esp_err_t err = esp_rmaker_param_update_and_report(s_attributes_param, esp_rmaker_obj(payload));
-    cJSON_free(payload);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to report matter attributes param: %s", esp_err_to_name(err));
-    }
+    bool changed = app_rmaker_matter_report_json_update_tree_item(root, endpoint_id, cluster_id, attribute_id,
+                                                                value_item);
+    cJSON_Delete(value_item);
+    return changed;
 }
 
-void app_rmaker_matter_attr_json_publish_online_delta(uint64_t node_id, const char *rainmaker_node_id, bool online)
+bool app_rmaker_matter_report_json_pending_is_empty(cJSON *pending_root)
 {
-    cJSON *root = cJSON_CreateObject();
-    cJSON *wrapper = cJSON_CreateObject();
-    if (!root || !wrapper) {
-        cJSON_Delete(root);
-        cJSON_Delete(wrapper);
-        return;
+    return !pending_root || !pending_root->child;
+}
+
+bool app_rmaker_matter_report_json_merge_pending_attr(cJSON **pending_root, uint64_t node_id,
+                                                    const char *rainmaker_node_id, uint16_t endpoint_id,
+                                                    uint32_t cluster_id, uint32_t attribute_id,
+                                                    const char *value_json)
+{
+    cJSON *value = NULL;
+    if (value_json && value_json[0] != '\0') {
+        value = cJSON_Parse(value_json);
+    }
+    if (!value) {
+        value = cJSON_CreateString(value_json ? value_json : "");
+    }
+    if (!value) {
+        return false;
+    }
+    bool merged = app_rmaker_matter_report_json_merge_pending_attr_item(pending_root, node_id, rainmaker_node_id,
+                                                                      endpoint_id, cluster_id, attribute_id, value);
+    cJSON_Delete(value);
+    return merged;
+}
+
+bool app_rmaker_matter_report_json_merge_pending_attr_item(cJSON **pending_root, uint64_t node_id,
+                                                         const char *rainmaker_node_id, uint16_t endpoint_id,
+                                                         uint32_t cluster_id, uint32_t attribute_id,
+                                                         const cJSON *value)
+{
+    if (!pending_root) {
+        return false;
+    }
+    if (!*pending_root) {
+        *pending_root = cJSON_CreateObject();
+        if (!*pending_root) {
+            return false;
+        }
+    }
+
+    char node_key[32];
+    snprintf(node_key, sizeof(node_key), "%016llx", (unsigned long long)node_id);
+    cJSON *wrapper = cJSON_GetObjectItem(*pending_root, node_key);
+    if (!wrapper) {
+        wrapper = cJSON_CreateObject();
+        if (!wrapper) {
+            return false;
+        }
+        cJSON_AddItemToObject(*pending_root, node_key, wrapper);
+        cJSON_AddItemToObject(wrapper, "rainmaker_node_id", cJSON_CreateString(rainmaker_node_id ? rainmaker_node_id : ""));
+    }
+    cJSON *endpoints = cJSON_GetObjectItem(wrapper, "endpoints");
+    if (!endpoints) {
+        endpoints = cJSON_CreateObject();
+        if (!endpoints) {
+            return false;
+        }
+        cJSON_AddItemToObject(wrapper, "endpoints", endpoints);
+    }
+    return app_rmaker_matter_report_json_update_tree_item(endpoints, endpoint_id, cluster_id, attribute_id, value);
+}
+
+cJSON *app_rmaker_matter_report_json_detach_pending_all(cJSON **pending_root)
+{
+    if (!pending_root || app_rmaker_matter_report_json_pending_is_empty(*pending_root)) {
+        return NULL;
+    }
+    cJSON *payload = *pending_root;
+    *pending_root = NULL;
+    return payload;
+}
+
+cJSON *app_rmaker_matter_report_json_detach_pending_node(cJSON **pending_root, uint64_t node_id)
+{
+    if (!pending_root || app_rmaker_matter_report_json_pending_is_empty(*pending_root)) {
+        return NULL;
     }
     char node_key[32];
     snprintf(node_key, sizeof(node_key), "%016llx", (unsigned long long)node_id);
-    cJSON_AddItemToObject(wrapper, "rainmaker_node_id", cJSON_CreateString(rainmaker_node_id ? rainmaker_node_id : ""));
-    cJSON_AddItemToObject(wrapper, "online", cJSON_CreateBool(online));
-    cJSON_AddItemToObject(root, node_key, wrapper);
-    app_rmaker_matter_attr_json_publish_matter_devices_delta(root);
+    cJSON *node = cJSON_DetachItemFromObject(*pending_root, node_key);
+    if (!node) {
+        return NULL;
+    }
+    cJSON *payload = cJSON_CreateObject();
+    if (!payload) {
+        cJSON_Delete(node);
+        return NULL;
+    }
+    cJSON_AddItemToObject(payload, node_key, node);
+    if (app_rmaker_matter_report_json_pending_is_empty(*pending_root)) {
+        cJSON_Delete(*pending_root);
+        *pending_root = NULL;
+    }
+    return payload;
 }

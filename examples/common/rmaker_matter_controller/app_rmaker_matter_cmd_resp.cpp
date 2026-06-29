@@ -1,16 +1,15 @@
 /*
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <esp_rmaker_cmd_resp.h>
 #include <esp_rmaker_utils.h>
 #include <esp_matter_core.h>
 #include <esp_matter_controller_utils.h>
 #include <esp_matter_controller_cluster_command.h>
+#include <esp_matter_controller_client.h>
 #include <esp_matter_controller_write_command.h>
 #include <esp_matter_controller_read_command.h>
 #include <esp_check.h>
@@ -28,6 +27,7 @@
 #include <app/ConcreteAttributePath.h>
 #include <app/MessageDef/StatusIB.h>
 #include <app/WriteClient.h>
+#include <app/server/Server.h>
 #include <lib/core/DataModelTypes.h>
 #include <lib/core/Optional.h>
 #include <lib/support/ScopedBuffer.h>
@@ -42,24 +42,30 @@ using namespace chip::app;
 
 #define MATTER_CONTROL_CMD_TYPE_INVOKE_CMD 0x1100
 #define MATTER_CONTROL_CMD_TYPE_WRITE_ATTR 0x1101
-#define MATTER_CONTROL_CMD_TYPE_READ 0x1102
+#define MATTER_CONTROL_CMD_TYPE_READ       0x1102
 
-#define MAX_COMMAND_FIELD_BUFFER_SIZE 120
-#define MAX_ATTRIBUTE_VALUE_BUFFER_SIZE MAX_COMMAND_FIELD_BUFFER_SIZE
-#define MAX_CMD_RESP_BUFFER_SIZE 5000
-#define MATTER_CMD_TIMEOUT_TICKS (20000 / portTICK_PERIOD_MS)
+static_assert(CONFIG_RMAKER_MTCTL_CMDRESP_MTCMD_TIMEOUT_MS > 0,
+              "CONFIG_RMAKER_MTCTL_CMDRESP_MTCMD_TIMEOUT_MS must be greater than 0");
+static_assert(CONFIG_RMAKER_MTCTL_CMDRESP_CMDFIELD_BUFFER_SIZE > 0,
+              "CONFIG_RMAKER_MTCTL_CMDRESP_CMDFIELD_BUFFER_SIZE must be greater than 0");
+static_assert(CONFIG_RMAKER_MTCTL_CMDRESP_ATTRVAL_BUFFER_SIZE > 0,
+              "CONFIG_RMAKER_MTCTL_CMDRESP_ATTRVAL_BUFFER_SIZE must be greater than 0");
+static_assert(CONFIG_RMAKER_MTCTL_CMDRESP_RESPONSE_BUFFER_SIZE > 0,
+              "CONFIG_RMAKER_MTCTL_CMDRESP_RESPONSE_BUFFER_SIZE must be greater than 0");
 
 namespace {
 char *s_cmd_resp_buffer = nullptr;
 cJSON *s_resp_root = nullptr;
 cJSON *s_resp_array = nullptr;
-cJSON *s_current_resp_obj = nullptr;
 SemaphoreHandle_t s_cmd_resp_mutex = nullptr;
 const int INVOKE_CMD_HANDLED_EVENT = BIT0;
 const int WRITE_ATTR_HANDLED_EVENT = BIT1;
 const int READ_HANDLED_EVENT = BIT2;
 EventGroupHandle_t s_matter_controller_event_group;
 bool s_cmd_resp_enabled = false;
+bool s_invoke_cmd_registered = false;
+bool s_write_attr_cmd_registered = false;
+bool s_read_cmd_registered = false;
 
 class CmdRespLock {
 public:
@@ -70,7 +76,10 @@ public:
             xSemaphoreGive(s_cmd_resp_mutex);
         }
     }
-    bool locked() const { return m_locked; }
+    bool locked() const
+    {
+        return m_locked;
+    }
 
 private:
     bool m_locked;
@@ -83,7 +92,6 @@ static void reset_response_json(void)
     }
     s_resp_root = nullptr;
     s_resp_array = nullptr;
-    s_current_resp_obj = nullptr;
 }
 
 static esp_err_t start_response_array(const char *array_key)
@@ -105,23 +113,15 @@ static esp_err_t serialize_response(size_t *out_len)
         return ESP_ERR_INVALID_STATE;
     }
 
-    char *json = cJSON_PrintUnformatted(s_resp_root);
-    if (!json) {
-        reset_response_json();
-        return ESP_ERR_NO_MEM;
-    }
-
-    size_t json_len = strnlen(json, MAX_CMD_RESP_BUFFER_SIZE);
-    if (json_len >= MAX_CMD_RESP_BUFFER_SIZE) {
-        cJSON_free(json);
+    s_cmd_resp_buffer[0] = '\0';
+    if (!cJSON_PrintPreallocated(s_resp_root, s_cmd_resp_buffer, CONFIG_RMAKER_MTCTL_CMDRESP_RESPONSE_BUFFER_SIZE,
+                                 false)) {
         reset_response_json();
         return ESP_FAIL;
     }
 
-    memset(s_cmd_resp_buffer, 0, MAX_CMD_RESP_BUFFER_SIZE);
-    memcpy(s_cmd_resp_buffer, json, json_len + 1);
+    size_t json_len = strlen(s_cmd_resp_buffer);
     *out_len = json_len;
-    cJSON_free(json);
     reset_response_json();
     return ESP_OK;
 }
@@ -143,17 +143,10 @@ static bool json_get_object_text(cJSON *obj, const char *key, char *buf, size_t 
         return false;
     }
 
-    char *json = cJSON_PrintUnformatted(item);
-    if (!json) {
+    buf[0] = '\0';
+    if (!cJSON_PrintPreallocated(item, buf, buf_size, false)) {
         return false;
     }
-    size_t json_len = strnlen(json, buf_size);
-    if (json_len >= buf_size) {
-        cJSON_free(json);
-        return false;
-    }
-    memcpy(buf, json, json_len + 1);
-    cJSON_free(json);
     return true;
 }
 
@@ -179,17 +172,23 @@ public:
     {
     }
 
+    void Deactivate()
+    {
+        m_active = false;
+        m_resp_obj = nullptr;
+    }
+
     void OnResponse(const WriteClient *client, const ConcreteDataAttributePath &path, StatusIB status) override
     {
         (void)client;
         (void)path;
         CHIP_ERROR error = status.ToChipError();
-        cJSON *resp_obj = current_response();
+        cJSON *resp_obj = m_active ? m_resp_obj : nullptr;
         if (!resp_obj || cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
-            return;
-        }
-        if (error == CHIP_NO_ERROR) {
-            cJSON_AddStringToObject(resp_obj, "status", "success");
+        return;
+    }
+    if (error == CHIP_NO_ERROR) {
+        cJSON_AddStringToObject(resp_obj, "status", "success");
         } else {
             cJSON_AddStringToObject(resp_obj, "status", "failure");
             cJSON_AddStringToObject(resp_obj, "reason", chip::ErrorStr(error));
@@ -199,9 +198,9 @@ public:
     void OnError(const WriteClient *client, CHIP_ERROR error) override
     {
         (void)client;
-        cJSON *resp_obj = current_response();
+        cJSON *resp_obj = m_active ? m_resp_obj : nullptr;
         if (resp_obj && !cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
-            cJSON_AddStringToObject(resp_obj, "status", "failure");
+        cJSON_AddStringToObject(resp_obj, "status", "failure");
             cJSON_AddStringToObject(resp_obj, "reason", chip::ErrorStr(error));
         }
         xEventGroupSetBits(s_matter_controller_event_group, WRITE_ATTR_HANDLED_EVENT);
@@ -210,119 +209,260 @@ public:
     void OnDone(WriteClient *client) override
     {
         (void)client;
-        cJSON *resp_obj = current_response();
+        cJSON *resp_obj = m_active ? m_resp_obj : nullptr;
         if (resp_obj && !cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
-            cJSON_AddStringToObject(resp_obj, "status", "success");
+        cJSON_AddStringToObject(resp_obj, "status", "success");
         }
         xEventGroupSetBits(s_matter_controller_event_group, WRITE_ATTR_HANDLED_EVENT);
         chip::Platform::Delete(this);
     }
 
 private:
-    cJSON *current_response() const
-    {
-        return m_resp_obj == s_current_resp_obj ? m_resp_obj : nullptr;
-    }
-
     cJSON *m_resp_obj;
+    bool m_active = true;
 };
 
-void invoke_cmd_success_fcn(void *ctx, const ConcreteCommandPath &command_path, const StatusIB &status,
-                            TLVReader *response_data)
-{
-    if (s_current_resp_obj) {
-        cJSON_AddStringToObject(s_current_resp_obj, "status", "success");
-        if (response_data) {
-            add_tlv_value_to_cjson(response_data, "response_data", s_current_resp_obj);
+class RmakerInvokeCommand {
+public:
+    RmakerInvokeCommand(uint64_t destination_id, uint16_t endpoint_id, uint32_t cluster_id, uint32_t command_id,
+                        const char *command_data_field,
+                        const chip::Optional<uint16_t> timed_interaction_timeout_ms, cJSON *resp_obj)
+        : m_destination_id(destination_id)
+        , m_endpoint_id(endpoint_id)
+        , m_cluster_id(cluster_id)
+        , m_command_id(command_id)
+        , m_command_data_field(command_data_field,
+                               esp_matter::client::interaction::custom_encodable_type::interaction_type::k_invoke_cmd)
+        , m_timed_interaction_timeout_ms(timed_interaction_timeout_ms)
+        , m_resp_obj(resp_obj)
+        , m_on_device_connected_cb(on_device_connected, this)
+        , m_on_device_connection_failure_cb(on_device_connection_failure, this)
+    {
+    }
+
+    esp_err_t Send()
+    {
+        if (chip::IsGroupId(m_destination_id)) {
+            return ESP_ERR_NOT_SUPPORTED;
+        }
+#ifdef CONFIG_ESP_MATTER_ENABLE_MATTER_SERVER
+        chip::Server &server = chip::Server::GetInstance();
+        server.GetCASESessionManager()->FindOrEstablishSession(chip::ScopedNodeId(m_destination_id, get_fabric_index()),
+                                                               &m_on_device_connected_cb,
+                                                               &m_on_device_connection_failure_cb);
+        return ESP_OK;
+#else
+        auto &controller_instance = esp_matter::controller::matter_controller_client::get_instance();
+#ifdef CONFIG_ESP_MATTER_COMMISSIONER_ENABLE
+        CHIP_ERROR err = controller_instance.get_commissioner()->GetConnectedDevice(m_destination_id,
+                                                                                    &m_on_device_connected_cb,
+                                                                                    &m_on_device_connection_failure_cb);
+#else
+        CHIP_ERROR err = controller_instance.get_controller()->GetConnectedDevice(m_destination_id,
+                                                                                  &m_on_device_connected_cb,
+                                                                                  &m_on_device_connection_failure_cb);
+#endif
+        if (err == CHIP_NO_ERROR) {
+            return ESP_OK;
+        }
+        chip::Platform::Delete(this);
+        return ESP_FAIL;
+#endif
+    }
+
+    void Deactivate()
+    {
+        m_active = false;
+        m_resp_obj = nullptr;
+    }
+
+private:
+    static void on_device_connected(void *context, chip::Messaging::ExchangeManager &exchange_mgr,
+                                    const chip::SessionHandle &session_handle)
+    {
+        RmakerInvokeCommand *cmd = reinterpret_cast<RmakerInvokeCommand *>(context);
+        chip::OperationalDeviceProxy device_proxy(&exchange_mgr, session_handle);
+        chip::app::CommandPathParams command_path = {cmd->m_endpoint_id, 0, cmd->m_cluster_id, cmd->m_command_id,
+                                                     chip::app::CommandPathFlags::kEndpointIdValid
+                                                    };
+        esp_err_t err = esp_matter::client::interaction::invoke::send_request(
+                            cmd, &device_proxy, command_path, cmd->m_command_data_field, on_success, on_error,
+                            cmd->m_timed_interaction_timeout_ms);
+        if (err != ESP_OK) {
+            cmd->set_failure("send_command failed");
+            xEventGroupSetBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
+            chip::Platform::Delete(cmd);
         }
     }
-    xEventGroupSetBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
-}
 
-void invoke_cmd_failure_fcn(void *ctx, CHIP_ERROR error)
-{
-    if (s_current_resp_obj) {
-        cJSON_AddStringToObject(s_current_resp_obj, "status", "failure");
-        cJSON_AddStringToObject(s_current_resp_obj, "reason", error.AsString());
+    static void on_device_connection_failure(void *context, const chip::ScopedNodeId &peer_id, CHIP_ERROR error)
+    {
+        (void)peer_id;
+        RmakerInvokeCommand *cmd = reinterpret_cast<RmakerInvokeCommand *>(context);
+        cmd->set_failure(chip::ErrorStr(error));
+        xEventGroupSetBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
+        chip::Platform::Delete(cmd);
     }
-    xEventGroupSetBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
-}
 
-static void read_attribute_data_cb(uint64_t remote_node_id,
-                                    const chip::app::ConcreteDataAttributePath &path,
-                                    chip::TLV::TLVReader *data)
-{
+    static void on_success(void *ctx, const ConcreteCommandPath &command_path, const StatusIB &status,
+                           TLVReader *response_data)
+    {
+        (void)command_path;
+        (void)status;
+        RmakerInvokeCommand *cmd = reinterpret_cast<RmakerInvokeCommand *>(ctx);
+        if (cmd->m_active && cmd->m_resp_obj) {
+            cJSON_AddStringToObject(cmd->m_resp_obj, "status", "success");
+            if (response_data) {
+                add_tlv_value_to_cjson(response_data, "response_data", cmd->m_resp_obj);
+            }
+        }
+        xEventGroupSetBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
+        chip::Platform::Delete(cmd);
+    }
+
+    static void on_error(void *ctx, CHIP_ERROR error)
+    {
+        RmakerInvokeCommand *cmd = reinterpret_cast<RmakerInvokeCommand *>(ctx);
+        cmd->set_failure(error.AsString());
+        xEventGroupSetBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
+        chip::Platform::Delete(cmd);
+    }
+
+    void set_failure(const char *reason)
+    {
+        if (m_active && m_resp_obj && !cJSON_GetObjectItemCaseSensitive(m_resp_obj, "status")) {
+            cJSON_AddStringToObject(m_resp_obj, "status", "failure");
+            cJSON_AddStringToObject(m_resp_obj, "reason", reason ? reason : "failure");
+        }
+    }
+
+    uint64_t m_destination_id;
+    uint16_t m_endpoint_id;
+    uint32_t m_cluster_id;
+    uint32_t m_command_id;
+    esp_matter::client::interaction::custom_encodable_type m_command_data_field;
+    chip::Optional<uint16_t> m_timed_interaction_timeout_ms;
+    cJSON *m_resp_obj;
+    bool m_active = true;
+    chip::Callback::Callback<chip::OnDeviceConnected> m_on_device_connected_cb;
+    chip::Callback::Callback<chip::OnDeviceConnectionFailure> m_on_device_connection_failure_cb;
+};
+
+class RmakerReadCommand : public controller::read_command {
+public:
+    RmakerReadCommand(uint64_t node_id,
+                      chip::Platform::ScopedMemoryBufferWithSize<AttributePathParams> &&attr_paths,
+                      chip::Platform::ScopedMemoryBufferWithSize<EventPathParams> &&event_paths,
+                      cJSON *resp_root, cJSON *resp_array)
+        : controller::read_command(node_id, std::move(attr_paths), std::move(event_paths), nullptr, nullptr, nullptr)
+        , m_resp_root(resp_root)
+        , m_resp_array(resp_array)
+    {
+    }
+
+    void Deactivate()
+    {
+        m_active = false;
+        m_resp_root = nullptr;
+        m_resp_array = nullptr;
+    }
+
+    void OnAttributeData(const chip::app::ConcreteDataAttributePath &path, chip::TLV::TLVReader *data,
+                         const chip::app::StatusIB &status) override
+    {
+        if (!m_active || !m_resp_array) {
+        return;
+    }
     char endpoint_id_str[8] = {0};
     char cluster_id_str[12] = {0};
     char attribute_id_str[12] = {0};
     snprintf(endpoint_id_str, sizeof(endpoint_id_str), "%u", path.mEndpointId);
-    snprintf(cluster_id_str, sizeof(cluster_id_str), "0x%08lx", (unsigned long)path.mClusterId);
-    snprintf(attribute_id_str, sizeof(attribute_id_str), "0x%08lx", (unsigned long)path.mAttributeId);
+        snprintf(cluster_id_str, sizeof(cluster_id_str), "0x%08lx", (unsigned long)path.mClusterId);
+        snprintf(attribute_id_str, sizeof(attribute_id_str), "0x%08lx", (unsigned long)path.mAttributeId);
 
-    if (!s_resp_array) {
+        cJSON *result = cJSON_CreateObject();
+        if (!result) {
         return;
     }
-
-    cJSON *result = cJSON_CreateObject();
-    if (!result) {
-        return;
-    }
-    cJSON_AddItemToArray(s_resp_array, result);
+    cJSON_AddItemToArray(m_resp_array, result);
     cJSON_AddStringToObject(result, "endpoint_id", endpoint_id_str);
     cJSON_AddStringToObject(result, "cluster_id", cluster_id_str);
     cJSON_AddStringToObject(result, "attribute_id", attribute_id_str);
-    if (data) {
+    CHIP_ERROR error = status.ToChipError();
+    if (error != CHIP_NO_ERROR) {
+        cJSON_AddStringToObject(result, "status", "failure");
+            cJSON_AddStringToObject(result, "reason", chip::ErrorStr(error));
+            return;
+        }
+        if (data) {
         add_tlv_value_to_cjson(data, "attribute_value", result);
+        }
     }
-}
 
-static void read_event_data_cb(uint64_t remote_node_id,
-                               const chip::app::EventHeader &header,
-                               chip::TLV::TLVReader *data)
-{
+    void OnEventData(const chip::app::EventHeader &header, chip::TLV::TLVReader *data,
+                     const chip::app::StatusIB *status) override
+    {
+        if (!m_active || !m_resp_array) {
+        return;
+    }
     char endpoint_id_str[8] = {0};
     char cluster_id_str[12] = {0};
     char event_id_str[12] = {0};
     snprintf(endpoint_id_str, sizeof(endpoint_id_str), "%u", header.mPath.mEndpointId);
-    snprintf(cluster_id_str, sizeof(cluster_id_str), "0x%08lx", (unsigned long)header.mPath.mClusterId);
-    snprintf(event_id_str, sizeof(event_id_str), "0x%08lx", (unsigned long)header.mPath.mEventId);
+        snprintf(cluster_id_str, sizeof(cluster_id_str), "0x%08lx", (unsigned long)header.mPath.mClusterId);
+        snprintf(event_id_str, sizeof(event_id_str), "0x%08lx", (unsigned long)header.mPath.mEventId);
 
-    if (!s_resp_array) {
+        cJSON *result = cJSON_CreateObject();
+        if (!result) {
         return;
     }
-
-    cJSON *result = cJSON_CreateObject();
-    if (!result) {
-        return;
-    }
-    cJSON_AddItemToArray(s_resp_array, result);
+    cJSON_AddItemToArray(m_resp_array, result);
     cJSON_AddStringToObject(result, "endpoint_id", endpoint_id_str);
     cJSON_AddStringToObject(result, "cluster_id", cluster_id_str);
     cJSON_AddStringToObject(result, "event_id", event_id_str);
-    if (data) {
+    if (status) {
+        CHIP_ERROR error = status->ToChipError();
+            if (error != CHIP_NO_ERROR) {
+                cJSON_AddStringToObject(result, "status", "failure");
+                cJSON_AddStringToObject(result, "reason", chip::ErrorStr(error));
+                return;
+            }
+        }
+        if (data) {
         add_tlv_value_to_cjson(data, "event_data", result);
+        }
     }
-}
 
-static void read_attribute_done_cb(uint64_t remote_node_id,
-                                    const chip::Platform::ScopedMemoryBufferWithSize<AttributePathParams> &attr_path,
-                                    const chip::Platform::ScopedMemoryBufferWithSize<EventPathParams> &event_path)
-{
-    (void)remote_node_id;
-    (void)attr_path;
-    (void)event_path;
-    xEventGroupSetBits(s_matter_controller_event_group, READ_HANDLED_EVENT);
-}
+    void OnError(CHIP_ERROR error) override
+    {
+        if (m_active && m_resp_root && !cJSON_GetObjectItemCaseSensitive(m_resp_root, "status")) {
+        cJSON_AddStringToObject(m_resp_root, "status", "failure");
+            cJSON_AddStringToObject(m_resp_root, "reason", chip::ErrorStr(error));
+        }
+        xEventGroupSetBits(s_matter_controller_event_group, READ_HANDLED_EVENT);
+    }
+
+    void OnDone(ReadClient *apReadClient) override
+    {
+        (void)apReadClient;
+        xEventGroupSetBits(s_matter_controller_event_group, READ_HANDLED_EVENT);
+        chip::Platform::Delete(this);
+    }
+
+private:
+    cJSON *m_resp_root;
+    cJSON *m_resp_array;
+    bool m_active = true;
+};
 
 esp_err_t invoke_cluster_command(uint64_t destination_id, uint16_t endpoint_id, uint32_t cluster_id,
                                  uint32_t command_id, const char *command_data_field,
-                                 const chip::Optional<uint16_t> timed_interaction_timeout_ms)
+                                 const chip::Optional<uint16_t> timed_interaction_timeout_ms, cJSON *resp_obj)
 {
     ESP_LOGI(TAG, "Send cluster command [cluster 0x%lx, command 0x%lx] to node %llx endpoint %x", cluster_id, command_id,
              destination_id, endpoint_id);
-    controller::cluster_command *cluster_command =
-        chip::Platform::New<controller::cluster_command>(destination_id, endpoint_id, cluster_id, command_id, command_data_field,
-                                                         timed_interaction_timeout_ms, invoke_cmd_success_fcn, invoke_cmd_failure_fcn);
+    RmakerInvokeCommand *cluster_command = chip::Platform::New<RmakerInvokeCommand>(
+                                               destination_id, endpoint_id, cluster_id, command_id, command_data_field, timed_interaction_timeout_ms, resp_obj);
     if (!cluster_command) {
         return ESP_ERR_NO_MEM;
     }
@@ -330,16 +470,17 @@ esp_err_t invoke_cluster_command(uint64_t destination_id, uint16_t endpoint_id, 
     {
         lock::ScopedChipStackLock lock(3000);
         xEventGroupClearBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT);
-        err = cluster_command->send_command();
+        err = cluster_command->Send();
     }
     if (err == ESP_OK) {
         EventBits_t bits = xEventGroupWaitBits(s_matter_controller_event_group, INVOKE_CMD_HANDLED_EVENT, true, true,
-                                               MATTER_CMD_TIMEOUT_TICKS);
+                                               pdMS_TO_TICKS(CONFIG_RMAKER_MTCTL_CMDRESP_MTCMD_TIMEOUT_MS));
         if ((bits & INVOKE_CMD_HANDLED_EVENT) == 0) {
-            if (s_current_resp_obj) {
-                cJSON_AddStringToObject(s_current_resp_obj, "status", "failure");
-                cJSON_AddStringToObject(s_current_resp_obj, "reason", "invoke command timeout");
+            if (resp_obj && !cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
+                cJSON_AddStringToObject(resp_obj, "status", "failure");
+                cJSON_AddStringToObject(resp_obj, "reason", "invoke command timeout");
             }
+            cluster_command->Deactivate();
             err = ESP_ERR_TIMEOUT;
         }
     }
@@ -366,7 +507,8 @@ esp_err_t esp_rmaker_matter_controller_invoke_cmd_handler(const void *in_data, s
     }
     uint16_t timed_interaction_timeout_ms = 0;
     bool has_timed_interaction_timeout = false;
-    ESP_LOGI(TAG, "Receive invoke-command command: %.*s", (int)in_len, (char *)in_data);
+    ESP_LOGI(TAG, "Receive invoke-command command: %u bytes", (unsigned)in_len);
+    ESP_LOGD(TAG, "Invoke-command payload: %.*s", (int)in_len, (char *)in_data);
 
     cJSON *root = cJSON_ParseWithLength((const char *)in_data, in_len);
     if (!cJSON_IsObject(root)) {
@@ -376,7 +518,7 @@ esp_err_t esp_rmaker_matter_controller_invoke_cmd_handler(const void *in_data, s
     }
 
     uint32_t cluster_id = chip::kInvalidClusterId, command_id = chip::kInvalidCommandId;
-    char command_fields_buffer[MAX_COMMAND_FIELD_BUFFER_SIZE] = "{}";
+    char command_fields_buffer[CONFIG_RMAKER_MTCTL_CMDRESP_CMDFIELD_BUFFER_SIZE] = "{}";
     char id_buffer[19] = {0};
     cJSON *request_payload = cJSON_GetObjectItemCaseSensitive(root, "request_payload");
     if (!cJSON_IsObject(request_payload)) {
@@ -425,33 +567,33 @@ esp_err_t esp_rmaker_matter_controller_invoke_cmd_handler(const void *in_data, s
         }
         uint64_t node_id = chip::kUndefinedNodeId;
         uint16_t endpoint_id = chip::kInvalidEndpointId;
-        s_current_resp_obj = cJSON_CreateObject();
-        if (!s_current_resp_obj) {
+        cJSON *resp_obj = cJSON_CreateObject();
+        if (!resp_obj) {
             cJSON_Delete(root);
             reset_response_json();
             return ESP_ERR_NO_MEM;
         }
-        cJSON_AddItemToArray(s_resp_array, s_current_resp_obj);
+        cJSON_AddItemToArray(s_resp_array, resp_obj);
         if (json_get_string(object, "matter_node_id", id_buffer, sizeof(id_buffer))) {
-            cJSON_AddStringToObject(s_current_resp_obj, "matter_node_id", id_buffer);
+            cJSON_AddStringToObject(resp_obj, "matter_node_id", id_buffer);
             node_id = string_to_uint64(id_buffer);
         }
         if (json_get_string(object, "matter_endpoint_id", id_buffer, sizeof(id_buffer))) {
-            cJSON_AddStringToObject(s_current_resp_obj, "matter_endpoint_id", id_buffer);
+            cJSON_AddStringToObject(resp_obj, "matter_endpoint_id", id_buffer);
             endpoint_id = string_to_uint16(id_buffer);
         }
         if (node_id != chip::kUndefinedNodeId && endpoint_id != chip::kInvalidEndpointId) {
             esp_err_t err = has_timed_interaction_timeout ?
-                invoke_cluster_command(node_id, endpoint_id, cluster_id, command_id, command_fields_buffer,
-                                       chip::MakeOptional(timed_interaction_timeout_ms)) :
-                invoke_cluster_command(node_id, endpoint_id, cluster_id, command_id, command_fields_buffer,
-                                       chip::NullOptional);
-            if (err != ESP_OK && !cJSON_GetObjectItemCaseSensitive(s_current_resp_obj, "status")) {
-                cJSON_AddStringToObject(s_current_resp_obj, "status", "failure");
+                            invoke_cluster_command(node_id, endpoint_id, cluster_id, command_id, command_fields_buffer,
+                                                   chip::MakeOptional(timed_interaction_timeout_ms), resp_obj) :
+                            invoke_cluster_command(node_id, endpoint_id, cluster_id, command_id, command_fields_buffer,
+                                                   chip::NullOptional, resp_obj);
+            if (err != ESP_OK && !cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
+                cJSON_AddStringToObject(resp_obj, "status", "failure");
             }
         } else {
-            cJSON_AddStringToObject(s_current_resp_obj, "status", "failure");
-            cJSON_AddStringToObject(s_current_resp_obj, "reason", "invalid object");
+            cJSON_AddStringToObject(resp_obj, "status", "failure");
+            cJSON_AddStringToObject(resp_obj, "reason", "invalid object");
         }
     }
     cJSON_Delete(root);
@@ -460,18 +602,20 @@ esp_err_t esp_rmaker_matter_controller_invoke_cmd_handler(const void *in_data, s
         return ret;
     }
     *out_data = s_cmd_resp_buffer;
-    ESP_LOGI(TAG, "Returning response: %s", s_cmd_resp_buffer);
+    ESP_LOGI(TAG, "Returning invoke-command response: %u bytes", (unsigned)*out_len);
+    ESP_LOGD(TAG, "Invoke-command response: %s", s_cmd_resp_buffer);
     return ESP_OK;
 }
 
 esp_err_t write_attr_command(uint64_t node_id, uint16_t endpoint_id, uint32_t cluster_id,
-                             uint32_t attribute_id, const char *attr_val)
+                             uint32_t attribute_id, const char *attr_val, cJSON *resp_obj)
 {
-    ESP_LOGI(TAG, "Send write_attr command [cluster 0x%lx, attribute 0x%lx] to node %llx endpoint %x", cluster_id, attribute_id,
+    ESP_LOGI(TAG, "Send write_attr command [cluster 0x%lx, attribute 0x%lx] to node %llx endpoint %x", cluster_id,
+             attribute_id,
              node_id, endpoint_id);
     RmakerWriteCommand *write_command = chip::Platform::New<RmakerWriteCommand>(node_id, endpoint_id, cluster_id,
                                                                                 attribute_id, attr_val,
-                                                                                s_current_resp_obj);
+                                                                                resp_obj);
     ESP_RETURN_ON_FALSE(write_command, ESP_ERR_NO_MEM, TAG, "Failed to allocate write command");
     esp_err_t err = ESP_OK;
     {
@@ -481,12 +625,13 @@ esp_err_t write_attr_command(uint64_t node_id, uint16_t endpoint_id, uint32_t cl
     }
     if (err == ESP_OK) {
         EventBits_t bits = xEventGroupWaitBits(s_matter_controller_event_group, WRITE_ATTR_HANDLED_EVENT, true, true,
-                                               MATTER_CMD_TIMEOUT_TICKS);
+                                               pdMS_TO_TICKS(CONFIG_RMAKER_MTCTL_CMDRESP_MTCMD_TIMEOUT_MS));
         if ((bits & WRITE_ATTR_HANDLED_EVENT) == 0) {
-            if (s_current_resp_obj && !cJSON_GetObjectItemCaseSensitive(s_current_resp_obj, "status")) {
-                cJSON_AddStringToObject(s_current_resp_obj, "status", "failure");
-                cJSON_AddStringToObject(s_current_resp_obj, "reason", "write attribute timeout");
+            if (resp_obj && !cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
+                cJSON_AddStringToObject(resp_obj, "status", "failure");
+                cJSON_AddStringToObject(resp_obj, "reason", "write attribute timeout");
             }
+            write_command->Deactivate();
             err = ESP_ERR_TIMEOUT;
         }
     }
@@ -498,9 +643,8 @@ esp_err_t read_attr_or_event_command(uint64_t node_id,
                                      chip::Platform::ScopedMemoryBufferWithSize<EventPathParams> &&event_paths)
 {
     ESP_LOGI(TAG, "Send read attribute/event command to node %llx", node_id);
-    controller::read_command *cmd = chip::Platform::New<controller::read_command>(
-        node_id, std::move(attr_paths), std::move(event_paths),
-        read_attribute_data_cb, read_attribute_done_cb, read_event_data_cb);
+    RmakerReadCommand *cmd = chip::Platform::New<RmakerReadCommand>(node_id, std::move(attr_paths), std::move(event_paths),
+                                                                    s_resp_root, s_resp_array);
     if (!cmd) {
         return ESP_ERR_NO_MEM;
     }
@@ -517,12 +661,13 @@ esp_err_t read_attr_or_event_command(uint64_t node_id,
         }
     } else {
         EventBits_t bits = xEventGroupWaitBits(s_matter_controller_event_group, READ_HANDLED_EVENT, true, true,
-                                               MATTER_CMD_TIMEOUT_TICKS);
+                                               pdMS_TO_TICKS(CONFIG_RMAKER_MTCTL_CMDRESP_MTCMD_TIMEOUT_MS));
         if ((bits & READ_HANDLED_EVENT) == 0) {
             if (s_resp_root) {
                 cJSON_AddStringToObject(s_resp_root, "status", "failure");
                 cJSON_AddStringToObject(s_resp_root, "reason", "read command timeout");
             }
+            cmd->Deactivate();
             err = ESP_ERR_TIMEOUT;
         }
     }
@@ -547,7 +692,8 @@ esp_err_t esp_rmaker_matter_controller_write_attr_handler(const void *in_data, s
         ESP_LOGE(TAG, "Command response buffer not allocated");
         return ESP_ERR_INVALID_STATE;
     }
-    ESP_LOGI(TAG, "Receive write-attribute command: %.*s", (int)in_len, (char *)in_data);
+    ESP_LOGI(TAG, "Receive write-attribute command: %u bytes", (unsigned)in_len);
+    ESP_LOGD(TAG, "Write-attribute payload: %.*s", (int)in_len, (char *)in_data);
 
     cJSON *root = cJSON_ParseWithLength((const char *)in_data, in_len);
     if (!cJSON_IsObject(root)) {
@@ -557,7 +703,7 @@ esp_err_t esp_rmaker_matter_controller_write_attr_handler(const void *in_data, s
     }
 
     uint32_t cluster_id = chip::kInvalidClusterId, attribute_id = chip::kInvalidAttributeId;
-    char attr_val_buffer[MAX_ATTRIBUTE_VALUE_BUFFER_SIZE] = {0};
+    char attr_val_buffer[CONFIG_RMAKER_MTCTL_CMDRESP_ATTRVAL_BUFFER_SIZE] = {0};
     char id_buffer[19] = {0};
     cJSON *request_payload = cJSON_GetObjectItemCaseSensitive(root, "request_payload");
     if (!cJSON_IsObject(request_payload)) {
@@ -599,28 +745,29 @@ esp_err_t esp_rmaker_matter_controller_write_attr_handler(const void *in_data, s
         }
         uint64_t node_id = chip::kUndefinedNodeId;
         uint16_t endpoint_id = chip::kInvalidEndpointId;
-        s_current_resp_obj = cJSON_CreateObject();
-        if (!s_current_resp_obj) {
+        cJSON *resp_obj = cJSON_CreateObject();
+        if (!resp_obj) {
             cJSON_Delete(root);
             reset_response_json();
             return ESP_ERR_NO_MEM;
         }
-        cJSON_AddItemToArray(s_resp_array, s_current_resp_obj);
+        cJSON_AddItemToArray(s_resp_array, resp_obj);
         if (json_get_string(object, "matter_node_id", id_buffer, sizeof(id_buffer))) {
-            cJSON_AddStringToObject(s_current_resp_obj, "matter_node_id", id_buffer);
+            cJSON_AddStringToObject(resp_obj, "matter_node_id", id_buffer);
             node_id = string_to_uint64(id_buffer);
         }
         if (json_get_string(object, "matter_endpoint_id", id_buffer, sizeof(id_buffer))) {
-            cJSON_AddStringToObject(s_current_resp_obj, "matter_endpoint_id", id_buffer);
+            cJSON_AddStringToObject(resp_obj, "matter_endpoint_id", id_buffer);
             endpoint_id = string_to_uint16(id_buffer);
         }
         if (node_id != chip::kUndefinedNodeId && endpoint_id != chip::kInvalidEndpointId) {
-            if (write_attr_command(node_id, endpoint_id, cluster_id, attribute_id, attr_val_buffer) != ESP_OK) {
-                cJSON_AddStringToObject(s_current_resp_obj, "status", "failure");
+            if (write_attr_command(node_id, endpoint_id, cluster_id, attribute_id, attr_val_buffer, resp_obj) != ESP_OK &&
+                    !cJSON_GetObjectItemCaseSensitive(resp_obj, "status")) {
+                cJSON_AddStringToObject(resp_obj, "status", "failure");
             }
         } else {
-            cJSON_AddStringToObject(s_current_resp_obj, "status", "failure");
-            cJSON_AddStringToObject(s_current_resp_obj, "reason", "invalid object");
+            cJSON_AddStringToObject(resp_obj, "status", "failure");
+            cJSON_AddStringToObject(resp_obj, "reason", "invalid object");
         }
     }
     cJSON_Delete(root);
@@ -629,7 +776,8 @@ esp_err_t esp_rmaker_matter_controller_write_attr_handler(const void *in_data, s
         return ret;
     }
     *out_data = s_cmd_resp_buffer;
-    ESP_LOGI(TAG, "Returning response: %s", s_cmd_resp_buffer);
+    ESP_LOGI(TAG, "Returning write-attribute response: %u bytes", (unsigned)*out_len);
+    ESP_LOGD(TAG, "Write-attribute response: %s", s_cmd_resp_buffer);
     return ESP_OK;
 }
 
@@ -652,7 +800,8 @@ esp_err_t esp_rmaker_matter_controller_read_handler(const void *in_data, size_t 
         ESP_LOGE(TAG, "Command response buffer not allocated");
         return ESP_ERR_INVALID_STATE;
     }
-    ESP_LOGI(TAG, "Receive read attribute/event command: %.*s", (int)in_len, (char *)in_data);
+    ESP_LOGI(TAG, "Receive read attribute/event command: %u bytes", (unsigned)in_len);
+    ESP_LOGD(TAG, "Read attribute/event payload: %.*s", (int)in_len, (char *)in_data);
 
     cJSON *root = cJSON_ParseWithLength((const char *)in_data, in_len);
     if (!cJSON_IsObject(root)) {
@@ -749,7 +898,7 @@ esp_err_t esp_rmaker_matter_controller_read_handler(const void *in_data, size_t 
     cJSON_AddStringToObject(s_resp_root, "matter_node_id", node_id_str);
     cJSON_AddItemToObject(s_resp_root, "read_results", s_resp_array);
     if (read_attr_or_event_command(node_id, std::move(attr_paths), std::move(event_paths)) != ESP_OK &&
-        !cJSON_GetObjectItemCaseSensitive(s_resp_root, "status")) {
+            !cJSON_GetObjectItemCaseSensitive(s_resp_root, "status")) {
         cJSON_AddStringToObject(s_resp_root, "status", "failure");
         cJSON_AddStringToObject(s_resp_root, "reason", "read_attr_or_event_command failed");
     }
@@ -759,7 +908,8 @@ esp_err_t esp_rmaker_matter_controller_read_handler(const void *in_data, size_t 
         return ret;
     }
     *out_data = s_cmd_resp_buffer;
-    ESP_LOGI(TAG, "Returning response: %s", s_cmd_resp_buffer);
+    ESP_LOGI(TAG, "Returning read attribute/event response: %u bytes", (unsigned)*out_len);
+    ESP_LOGD(TAG, "Read attribute/event response: %s", s_cmd_resp_buffer);
     return ESP_OK;
 }
 } // namespace
@@ -771,12 +921,12 @@ esp_err_t app_rmaker_matter_cmd_resp_enable(void)
         return ESP_OK;
     }
     if (s_cmd_resp_buffer == nullptr) {
-        s_cmd_resp_buffer = (char *)MEM_CALLOC_EXTRAM(1, MAX_CMD_RESP_BUFFER_SIZE);
+        s_cmd_resp_buffer = (char *)MEM_CALLOC_EXTRAM(1, CONFIG_RMAKER_MTCTL_CMDRESP_RESPONSE_BUFFER_SIZE);
         if (s_cmd_resp_buffer == NULL) {
             ESP_LOGE(TAG, "Failed to allocate command response buffer");
             return ESP_ERR_NO_MEM;
         }
-        ESP_LOGI(TAG, "Allocated %d bytes for command response buffer", MAX_CMD_RESP_BUFFER_SIZE);
+        ESP_LOGI(TAG, "Allocated %d bytes for command response buffer", CONFIG_RMAKER_MTCTL_CMDRESP_RESPONSE_BUFFER_SIZE);
     }
     if (s_cmd_resp_mutex == nullptr) {
         s_cmd_resp_mutex = xSemaphoreCreateMutex();
@@ -793,46 +943,58 @@ esp_err_t app_rmaker_matter_cmd_resp_enable(void)
         }
     }
     esp_err_t ret = ESP_OK;
-    
-    ESP_GOTO_ON_ERROR(esp_rmaker_cmd_register(MATTER_CONTROL_CMD_TYPE_INVOKE_CMD,
-                                            ESP_RMAKER_USER_ROLE_SUPER_ADMIN |
-                                            ESP_RMAKER_USER_ROLE_PRIMARY_USER |
-                                            ESP_RMAKER_USER_ROLE_SECONDARY_USER,
-                                            esp_rmaker_matter_controller_invoke_cmd_handler,
-                                            false, nullptr),
-                      clear, TAG, "Failed to register invoke command handler");
 
-    ESP_GOTO_ON_ERROR(esp_rmaker_cmd_register(MATTER_CONTROL_CMD_TYPE_WRITE_ATTR,
-                                            ESP_RMAKER_USER_ROLE_SUPER_ADMIN |
-                                            ESP_RMAKER_USER_ROLE_PRIMARY_USER |
-                                            ESP_RMAKER_USER_ROLE_SECONDARY_USER,
-                                            esp_rmaker_matter_controller_write_attr_handler,
-                                            false, nullptr),
-                      clear, TAG, "Failed to register write attribute handler");
+    if (!s_invoke_cmd_registered) {
+        ESP_GOTO_ON_ERROR(esp_rmaker_cmd_register(MATTER_CONTROL_CMD_TYPE_INVOKE_CMD,
+                                                  ESP_RMAKER_USER_ROLE_SUPER_ADMIN |
+                                                  ESP_RMAKER_USER_ROLE_PRIMARY_USER |
+                                                  ESP_RMAKER_USER_ROLE_SECONDARY_USER,
+                                                  esp_rmaker_matter_controller_invoke_cmd_handler,
+                                                  false, nullptr),
+                          clear, TAG, "Failed to register invoke command handler");
+        s_invoke_cmd_registered = true;
+    }
 
-    ESP_GOTO_ON_ERROR(esp_rmaker_cmd_register(MATTER_CONTROL_CMD_TYPE_READ,
-                                            ESP_RMAKER_USER_ROLE_SUPER_ADMIN |
-                                            ESP_RMAKER_USER_ROLE_PRIMARY_USER |
-                                            ESP_RMAKER_USER_ROLE_SECONDARY_USER,
-                                            esp_rmaker_matter_controller_read_handler,
-                                            false, nullptr),
-                      clear, TAG, "Failed to register read handler");
+    if (!s_write_attr_cmd_registered) {
+        ESP_GOTO_ON_ERROR(esp_rmaker_cmd_register(MATTER_CONTROL_CMD_TYPE_WRITE_ATTR,
+                                                  ESP_RMAKER_USER_ROLE_SUPER_ADMIN |
+                                                  ESP_RMAKER_USER_ROLE_PRIMARY_USER |
+                                                  ESP_RMAKER_USER_ROLE_SECONDARY_USER,
+                                                  esp_rmaker_matter_controller_write_attr_handler,
+                                                  false, nullptr),
+                          clear, TAG, "Failed to register write attribute handler");
+        s_write_attr_cmd_registered = true;
+    }
+
+    if (!s_read_cmd_registered) {
+        ESP_GOTO_ON_ERROR(esp_rmaker_cmd_register(MATTER_CONTROL_CMD_TYPE_READ,
+                                                  ESP_RMAKER_USER_ROLE_SUPER_ADMIN |
+                                                  ESP_RMAKER_USER_ROLE_PRIMARY_USER |
+                                                  ESP_RMAKER_USER_ROLE_SECONDARY_USER,
+                                                  esp_rmaker_matter_controller_read_handler,
+                                                  false, nullptr),
+                          clear, TAG, "Failed to register read handler");
+        s_read_cmd_registered = true;
+    }
 clear:
     if (ret != ESP_OK) {
-        if (s_cmd_resp_buffer) {
+        bool any_registered = s_invoke_cmd_registered || s_write_attr_cmd_registered || s_read_cmd_registered;
+        if (any_registered) {
+            ESP_LOGW(TAG, "Command response enable incomplete; keeping resources for registered handlers");
+        } else if (s_cmd_resp_buffer) {
             free(s_cmd_resp_buffer);
             s_cmd_resp_buffer = nullptr;
         }
-        if (s_matter_controller_event_group) {
+        if (!any_registered && s_matter_controller_event_group) {
             vEventGroupDelete(s_matter_controller_event_group);
             s_matter_controller_event_group = NULL;
         }
-        if (s_cmd_resp_mutex) {
+        if (!any_registered && s_cmd_resp_mutex) {
             vSemaphoreDelete(s_cmd_resp_mutex);
             s_cmd_resp_mutex = nullptr;
         }
     } else {
-        s_cmd_resp_enabled = true;
+        s_cmd_resp_enabled = s_invoke_cmd_registered && s_write_attr_cmd_registered && s_read_cmd_registered;
     }
     return ret;
 }

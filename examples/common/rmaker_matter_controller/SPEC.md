@@ -60,13 +60,13 @@ This parameter is a bitmap value which corresponds to the status of Matter Contr
 
 ### 2.4 MTDevices Parameter
 
-This parameter belongs to the Matter Controller Setup Service. It reports Matter end-device online state and latest attribute state. It is read-only and updated by the controller from Matter subscription reports.
+This parameter belongs to the Matter Controller Setup Service. It reports Matter end-device online state and latest attribute state. The controller intentionally reports `{}` during RainMaker startup to reset stale backend state, then publishes online and attribute deltas from Matter subscription reports.
 
-Attribute reporting is initialized lazily by `app_rmaker_matter_attr_report_enable()` when a successful device-list update is processed.
+Matter reporting is initialized lazily by `app_rmaker_matter_report_enable()` when a successful device-list update is processed.
 
 #### 2.4.1 Device List And Subscription Ownership
 
-`app_rmaker_matter_device_list_update()` fetches a temporary Matter device list from RainMaker. On success, the list is passed to `app_rmaker_matter_attr_report_on_device_list_update()` and then to the application callback. The list is valid only during those calls.
+`app_rmaker_matter_device_list_update()` fetches a temporary Matter device list from RainMaker. On success, the list is passed to `app_rmaker_matter_report_on_device_list_update()` and then to the application callback. The list is valid only during those calls.
 
 Applications that need to retain the list must copy it with `app_rmaker_device_list_copy_create()` and later free it with `app_rmaker_device_list_copy_destroy()`.
 
@@ -102,14 +102,14 @@ Applications that need to retain the list must copy it with `app_rmaker_device_l
 
 #### 2.4.3 Local Attribute Callback
 
-Applications can register a local callback with `app_rmaker_matter_controller_register_attr_report_callback()`.
+Applications can register a local callback with `app_rmaker_matter_report_set_callback()`.
 
-| Event Type        | Detection Rule                                             | Value Field         |
-| ----------------- | ---------------------------------------------------------- | ------------------- |
-| Node online state | `endpoint_id == 0 && cluster_id == 0 && attribute_id == 0` | `event->online`     |
-| Attribute report  | Any non-filtered Matter attribute path                     | `event->value_json` |
+| Report Type | Data Shape |
+| ----------- | ---------- |
+| Online      | `{"online": true|false}` |
+| Attribute   | `{"<node_id>": {"<endpoint_id>": {"<cluster_id>": {"<attribute_id>": {"value": ...}}}}}` |
 
-The callback receives owned data only for the duration of the callback. Copy `event->value_json` if it must be retained.
+The callback receives data owned by the report task and valid only for the duration of the callback. Copy `report->data` if it must be retained.
 
 #### 2.4.4 Batching And Rate Limiting
 
@@ -117,10 +117,10 @@ Matter subscription callbacks serialize TLV values into owned queue items before
 
 RainMaker publishes are rate-limited by a token bucket:
 
-| Config                                                          | Summary                                                |
-| --------------------------------------------------------------- | ------------------------------------------------------ |
-| `CONFIG_RAINMAKER_MATTER_CONTROLLER_ATTR_BATCH_BUCKET_CAPACITY` | Number of quick publishes allowed after an idle period |
-| `CONFIG_RAINMAKER_MATTER_CONTROLLER_ATTR_BATCH_REFILL_MS`       | Sustained token refill interval in milliseconds        |
+| Config                                           | Summary                                                |
+| ------------------------------------------------ | ------------------------------------------------------ |
+| `CONFIG_RMAKER_MTCTL_REPORT_ATTR_BUCKET_CAPACITY` | Number of quick publishes allowed after an idle period |
+| `CONFIG_RMAKER_MTCTL_REPORT_ATTR_BUCKET_REFILL_MS` | Sustained token refill interval in milliseconds        |
 
 Nearby attribute changes are coalesced internally before publishing. The coalesce delay is intentionally not exposed as Kconfig.
 
