@@ -40,9 +40,7 @@ typedef struct {
     char *rmaker_group_id;
     QueueHandle_t event_task_queue;
     TaskHandle_t event_task_handle;
-    SemaphoreHandle_t dev_list_mutex;
-    matter_device_t *dev_list;
-    device_list_update_callback_t dev_list_update_cb;
+    matter_controller_device_list_update_callback_t dev_list_update_cb;
     bool is_setup_successfully_before;
     bool is_authorized;
     bool is_controller_setup;

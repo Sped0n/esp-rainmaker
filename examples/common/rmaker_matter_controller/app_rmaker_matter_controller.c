@@ -357,40 +357,35 @@ esp_err_t app_rmaker_matter_controller_handle_update()
     return send_event_to_matter_ctl_task(MATTER_CONTROLLER_EVENT_TYPE_UPDATE_HANDLE);
 }
 
-bool app_rmaker_matter_controller_can_update_device_list()
+bool app_rmaker_matter_device_list_updatable(void)
 {
     return check_handle_state() && s_matter_controller_handle->is_controller_setup;
 }
 
-esp_err_t app_rmaker_update_matter_device_list()
+esp_err_t app_rmaker_matter_device_list_update(void)
 {
     return send_event_to_matter_ctl_task(MATTER_CONTROLLER_EVENT_TYPE_UPDATE_DEVICE_LIST);
 }
 
 static esp_err_t update_device_list()
 {
-    matter_device_t *tmp = NULL;
+    matter_device_t *dev_list = NULL;
     esp_err_t ret = ESP_OK;
     ESP_GOTO_ON_FALSE(check_handle_state(), ESP_ERR_INVALID_STATE, exit, TAG, "Controller not authorized or not setup");
-    ESP_GOTO_ON_ERROR(app_rmaker_api_get_matter_device_list(s_matter_controller_handle->rmaker_group_id, &tmp), exit,
+    ESP_GOTO_ON_ERROR(app_rmaker_api_get_matter_device_list(s_matter_controller_handle->rmaker_group_id, &dev_list), exit,
                       TAG, "Failed to get matter device list");
-    xSemaphoreTakeRecursive(s_matter_controller_handle->dev_list_mutex, portMAX_DELAY);
-    if (s_matter_controller_handle->dev_list) {
-        app_rmaker_free_matter_device_list(s_matter_controller_handle->dev_list);
-    }
-    s_matter_controller_handle->dev_list = tmp;
-    xSemaphoreGiveRecursive(s_matter_controller_handle->dev_list_mutex);
 exit:
-    if (s_matter_controller_handle->dev_list_update_cb) {
-        s_matter_controller_handle->dev_list_update_cb(ret);
-    }
     if (ret == ESP_OK) {
-        app_rmaker_matter_controller_attr_report_on_device_list_update();
+        app_rmaker_matter_attr_report_on_device_list_update(dev_list);
     }
+    if (s_matter_controller_handle->dev_list_update_cb) {
+        s_matter_controller_handle->dev_list_update_cb(ret, ret == ESP_OK ? dev_list : NULL);
+    }
+    app_rmaker_device_list_copy_destroy(dev_list);
     return ret;
 }
 
-void app_rmaker_free_matter_device_list(matter_device_t *dev_list)
+void app_rmaker_device_list_copy_destroy(matter_device_t *dev_list)
 {
     matter_device_t *current = dev_list;
     while (current) {
@@ -400,7 +395,7 @@ void app_rmaker_free_matter_device_list(matter_device_t *dev_list)
     }
 }
 
-void app_rmaker_print_matter_device_list(matter_device_t *dev_list)
+void app_rmaker_device_list_print(const matter_device_t *dev_list)
 {
     uint16_t dev_index = 0;
     while (dev_list) {
@@ -431,7 +426,7 @@ void app_rmaker_print_matter_device_list(matter_device_t *dev_list)
     }
 }
 
-static matter_device_t *clone_dev_info(matter_device_t *dev)
+static matter_device_t *clone_dev_info(const matter_device_t *dev)
 {
     matter_device_t *ret = (matter_device_t *)MEM_CALLOC_EXTRAM(1, sizeof(matter_device_t));
     if (!ret) {
@@ -443,27 +438,21 @@ static matter_device_t *clone_dev_info(matter_device_t *dev)
     return ret;
 }
 
-matter_device_t *app_rmaker_get_matter_device_list()
+matter_device_t *app_rmaker_device_list_copy_create(const matter_device_t *src_dev_list)
 {
     matter_device_t *ret = NULL;
-    if (!s_matter_controller_handle || !s_matter_controller_handle->dev_list_mutex) {
-        ESP_LOGE(TAG, "Not initialized, call app_rmaker_matter_controller_enable first");
-        return NULL;
-    }
-    xSemaphoreTakeRecursive(s_matter_controller_handle->dev_list_mutex, portMAX_DELAY);
-    matter_device_t *current = s_matter_controller_handle->dev_list;
+    const matter_device_t *current = src_dev_list;
+    matter_device_t **tail = &ret;
     while (current) {
         matter_device_t *tmp = clone_dev_info(current);
         if (!tmp) {
-            app_rmaker_free_matter_device_list(ret);
-            xSemaphoreGiveRecursive(s_matter_controller_handle->dev_list_mutex);
+            app_rmaker_device_list_copy_destroy(ret);
             return NULL;
         }
-        tmp->next = ret;
-        ret = tmp;
+        *tail = tmp;
+        tail = &tmp->next;
         current = current->next;
     }
-    xSemaphoreGiveRecursive(s_matter_controller_handle->dev_list_mutex);
     return ret;
 }
 
@@ -564,10 +553,6 @@ esp_err_t app_rmaker_matter_controller_enable(matter_controller_config_t *config
     ESP_GOTO_ON_FALSE(s_matter_controller_handle->event_task_handle, ESP_FAIL, exit, TAG,
                       "Failed to create matter controller task");
 
-    s_matter_controller_handle->dev_list_mutex = xSemaphoreCreateRecursiveMutex();
-    ESP_GOTO_ON_FALSE(s_matter_controller_handle->dev_list_mutex, ESP_FAIL, exit, TAG,
-                      "Failed to create device list mutex");
-
     s_matter_controller_handle->matter_devices_param = esp_rmaker_device_get_param_by_type(
         s_matter_controller_handle->service, ESP_RMAKER_PARAM_MATTER_DEVICES);
     ESP_GOTO_ON_FALSE(s_matter_controller_handle->matter_devices_param, ESP_ERR_INVALID_STATE, exit, TAG,
@@ -585,10 +570,6 @@ exit:
     if (s_matter_controller_handle->event_task_queue) {
         vQueueDelete(s_matter_controller_handle->event_task_queue);
         s_matter_controller_handle->event_task_queue = NULL;
-    }
-    if (s_matter_controller_handle->dev_list_mutex) {
-        vSemaphoreDelete(s_matter_controller_handle->dev_list_mutex);
-        s_matter_controller_handle->dev_list_mutex = NULL;
     }
     free(s_matter_controller_handle);
     s_matter_controller_handle = NULL;

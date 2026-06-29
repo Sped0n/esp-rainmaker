@@ -802,7 +802,7 @@ esp_err_t app_rmaker_api_get_matter_device_list(const char *group_id, matter_dev
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to fetch metadata for Matter Node 0x%08" PRIx32 "%08" PRIx32,
                          (uint32_t)(dev->node_id >> 32), (uint32_t)(dev->node_id & 0xFFFFFFFF));
-                app_rmaker_free_matter_device_list(*device_list);
+                app_rmaker_device_list_copy_destroy(*device_list);
                 *device_list = NULL;
                 return err;
             }
