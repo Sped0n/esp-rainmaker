@@ -6,6 +6,31 @@ menu "ESP Rainmaker Controller"
         help
             Set the stack size of ESP Rainmaker Matter Controller task.
 
+    config RAINMAKER_MATTER_CONTROLLER_ATTR_REPORT_TASK_STACK
+        int "ESP Rainmaker Matter Controller Attribute Report Task Stack Size"
+        default 8192
+        help
+            Set the stack size of ESP Rainmaker Matter Controller attribute report task.
+
+    config RAINMAKER_MATTER_CONTROLLER_ATTR_BATCH_BUCKET_CAPACITY
+        int "ESP Rainmaker Matter Controller Attribute Report Batch Bucket Capacity"
+        default 3
+        help
+            Set the number of attribute report batches that may be published quickly after an idle period.
+
+    config RAINMAKER_MATTER_CONTROLLER_ATTR_BATCH_REFILL_MS
+        int "ESP Rainmaker Matter Controller Attribute Report Batch Token Refill (ms)"
+        default 10000
+        help
+            Set the token refill interval used to bound sustained RainMaker attribute report publish rate.
+
+    config RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL
+        bool "Allocate ESP Rainmaker Matter Controller buffers in external memory"
+        depends on SPIRAM && (SPIRAM_USE_CAPS_ALLOC || SPIRAM_USE_MALLOC) && FREERTOS_SUPPORT_STATIC_ALLOCATION
+        default y
+        help
+            Allocate buffers in external memory when available. This saves internal heap.
+
     config RAINMAKER_MATTER_CONTROLLER_MAX_ENDPOINT_COUNT_PER_DEVICE
         int "ESP Rainmaker Matter Controller Max Endpoint Count Per Device"
         range 1 16
