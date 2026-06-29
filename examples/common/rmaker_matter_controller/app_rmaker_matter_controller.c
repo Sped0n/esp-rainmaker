@@ -18,7 +18,12 @@
 #include "app_rmaker_matter_controller_api.h"
 #include "app_rmaker_matter_controller_internal.h"
 #include "app_rmaker_matter_controller_service.h"
+#include "app_rmaker_matter_attr_json.h"
 #include "app_rmaker_user_api.h"
+
+#if !CONFIG_RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL
+#warning "RAINMAKER_MATTER_CONTROLLER_MEM_ALLOC_MODE_EXTERNAL is disabled; internal heap exhaustion may occur. Enabling PSRAM and external memory allocation is strongly recommended."
+#endif
 
 #define TAG "rmaker_matter_controller"
 
@@ -189,6 +194,15 @@ static void event_task_handler(void *pvParameters)
 static esp_err_t update_rmaker_group_id(const char *rmaker_group_id, const esp_rmaker_device_t *service,
                                         esp_rmaker_write_ctx_t *ctx)
 {
+    if (ctx->src != ESP_RMAKER_REQ_SRC_INIT && s_matter_controller_handle->rmaker_group_id &&
+        s_matter_controller_handle->rmaker_group_id[0] != '\0') {
+        if (!rmaker_group_id || strcmp(s_matter_controller_handle->rmaker_group_id, rmaker_group_id) != 0) {
+            ESP_LOGW(TAG, "RMakerGroupID is already set and cannot be changed");
+            return ESP_ERR_INVALID_STATE;
+        }
+        return ESP_OK;
+    }
+
     safe_free(&s_matter_controller_handle->rmaker_group_id);
 
     size_t size_to_copy = 0;
@@ -343,6 +357,11 @@ esp_err_t app_rmaker_matter_controller_handle_update()
     return send_event_to_matter_ctl_task(MATTER_CONTROLLER_EVENT_TYPE_UPDATE_HANDLE);
 }
 
+bool app_rmaker_matter_controller_can_update_device_list()
+{
+    return check_handle_state() && s_matter_controller_handle->is_controller_setup;
+}
+
 esp_err_t app_rmaker_update_matter_device_list()
 {
     return send_event_to_matter_ctl_task(MATTER_CONTROLLER_EVENT_TYPE_UPDATE_DEVICE_LIST);
@@ -364,6 +383,9 @@ static esp_err_t update_device_list()
 exit:
     if (s_matter_controller_handle->dev_list_update_cb) {
         s_matter_controller_handle->dev_list_update_cb(ret);
+    }
+    if (ret == ESP_OK) {
+        app_rmaker_matter_controller_attr_report_on_device_list_update();
     }
     return ret;
 }
@@ -545,6 +567,14 @@ esp_err_t app_rmaker_matter_controller_enable(matter_controller_config_t *config
     s_matter_controller_handle->dev_list_mutex = xSemaphoreCreateRecursiveMutex();
     ESP_GOTO_ON_FALSE(s_matter_controller_handle->dev_list_mutex, ESP_FAIL, exit, TAG,
                       "Failed to create device list mutex");
+
+    s_matter_controller_handle->matter_devices_param = esp_rmaker_device_get_param_by_type(
+        s_matter_controller_handle->service, ESP_RMAKER_PARAM_MATTER_DEVICES);
+    ESP_GOTO_ON_FALSE(s_matter_controller_handle->matter_devices_param, ESP_ERR_INVALID_STATE, exit, TAG,
+                      "MTDevices param not created");
+    app_rmaker_matter_attr_json_set_param(s_matter_controller_handle->matter_devices_param);
+    ESP_GOTO_ON_ERROR(app_rmaker_matter_cmd_resp_enable(), exit, TAG,
+                      "Failed to enable command response");
 
     return ESP_OK;
 exit:
