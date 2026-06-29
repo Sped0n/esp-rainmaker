@@ -41,9 +41,9 @@ extern "C" {
  * @return NULL in case of failures.
  */
 esp_rmaker_device_t *matter_controller_setup_service_create(const char *serv_name,
-                                                            esp_rmaker_device_bulk_write_cb_t bulk_write_cb,
-                                                            esp_rmaker_device_bulk_read_cb_t bulk_read_cb,
-                                                            void *priv_data);
+                                                             esp_rmaker_device_bulk_write_cb_t bulk_write_cb,
+                                                             esp_rmaker_device_bulk_read_cb_t bulk_read_cb,
+                                                             void *priv_data);
 
 #ifdef __cplusplus
 }

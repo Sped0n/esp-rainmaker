@@ -6,8 +6,6 @@
 
 #include <app_rmaker_matter_json_helpers.h>
 
-#include <app_rmaker_matter_attr_json.h>
-
 #include <inttypes.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -190,79 +188,4 @@ esp_err_t app_rmaker_matter_tlv_to_json_string(chip::TLV::TLVReader *reader, cha
         buf[buf_size - 1] = '\0';
     }
     return ok ? ESP_OK : ESP_FAIL;
-}
-
-bool app_rmaker_matter_json_pending_is_empty(cJSON *pending_root)
-{
-    return !pending_root || !pending_root->child;
-}
-
-bool app_rmaker_matter_json_merge_pending_attr(cJSON **pending_root, uint64_t node_id,
-                                               const char *rainmaker_node_id, uint16_t endpoint_id,
-                                               uint32_t cluster_id, uint32_t attribute_id, const char *value_json)
-{
-    if (!pending_root) {
-        return false;
-    }
-    if (!*pending_root) {
-        *pending_root = cJSON_CreateObject();
-        if (!*pending_root) {
-            return false;
-        }
-    }
-
-    char node_key[32];
-    snprintf(node_key, sizeof(node_key), "%016llx", (unsigned long long)node_id);
-    cJSON *wrapper = cJSON_GetObjectItem(*pending_root, node_key);
-    if (!wrapper) {
-        wrapper = cJSON_CreateObject();
-        if (!wrapper) {
-            return false;
-        }
-        cJSON_AddItemToObject(*pending_root, node_key, wrapper);
-        cJSON_AddItemToObject(wrapper, "rainmaker_node_id", cJSON_CreateString(rainmaker_node_id ? rainmaker_node_id : ""));
-    }
-    cJSON *endpoints = cJSON_GetObjectItem(wrapper, "endpoints");
-    if (!endpoints) {
-        endpoints = cJSON_CreateObject();
-        if (!endpoints) {
-            return false;
-        }
-        cJSON_AddItemToObject(wrapper, "endpoints", endpoints);
-    }
-    return app_rmaker_matter_attr_json_update_tree(endpoints, endpoint_id, cluster_id, attribute_id, value_json);
-}
-
-cJSON *app_rmaker_matter_json_detach_pending_all(cJSON **pending_root)
-{
-    if (!pending_root || app_rmaker_matter_json_pending_is_empty(*pending_root)) {
-        return NULL;
-    }
-    cJSON *payload = *pending_root;
-    *pending_root = NULL;
-    return payload;
-}
-
-cJSON *app_rmaker_matter_json_detach_pending_node(cJSON **pending_root, uint64_t node_id)
-{
-    if (!pending_root || app_rmaker_matter_json_pending_is_empty(*pending_root)) {
-        return NULL;
-    }
-    char node_key[32];
-    snprintf(node_key, sizeof(node_key), "%016llx", (unsigned long long)node_id);
-    cJSON *node = cJSON_DetachItemFromObject(*pending_root, node_key);
-    if (!node) {
-        return NULL;
-    }
-    cJSON *payload = cJSON_CreateObject();
-    if (!payload) {
-        cJSON_Delete(node);
-        return NULL;
-    }
-    cJSON_AddItemToObject(payload, node_key, node);
-    if (app_rmaker_matter_json_pending_is_empty(*pending_root)) {
-        cJSON_Delete(*pending_root);
-        *pending_root = NULL;
-    }
-    return payload;
 }

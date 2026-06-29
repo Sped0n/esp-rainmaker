@@ -10,6 +10,10 @@
 
 #include "app_rmaker_matter_controller_service.h"
 
+#define STRINGIFY_VALUE(x) #x
+#define STRINGIFY(x) STRINGIFY_VALUE(x)
+#define MATTER_DEVICES_SCHEMA_REVISION 0
+
 static esp_rmaker_param_t *matter_controller_rmaker_group_id_param_create(const char *param_name)
 {
     esp_rmaker_param_t *param =
@@ -34,7 +38,9 @@ static esp_rmaker_param_t *matter_controller_matter_ctl_status_param_create(cons
 
 static esp_rmaker_param_t *matter_controller_matter_devices_param_create(const char *param_name)
 {
-    return esp_rmaker_param_create(param_name, ESP_RMAKER_PARAM_MATTER_DEVICES, esp_rmaker_obj("{}"), PROP_FLAG_READ);
+    return esp_rmaker_param_create(param_name, ESP_RMAKER_PARAM_MATTER_DEVICES,
+                                   esp_rmaker_obj("{\"revision\":" STRINGIFY(MATTER_DEVICES_SCHEMA_REVISION) "}"),
+                                   PROP_FLAG_READ);
 }
 
 esp_rmaker_device_t *matter_controller_setup_service_create(const char *serv_name,

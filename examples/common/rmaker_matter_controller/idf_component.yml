@@ -5,7 +5,17 @@ repository: https://github.com/espressif/esp-rainmaker.git
 
 dependencies:
   ## cJSON moved out of core IDF in v6.0; pull it from the registry.
+<<<<<<< HEAD
   espressif/cjson: "1.7.19~2"
   espressif/esp_matter: "~1.5.0"
+||||||| parent of 680a04f6 (fixup component)
+  espressif/cjson: "*"
+  espressif/esp_matter:
+    version: "~1.5.0"
+=======
+  espressif/cjson: "*"
+  espressif/esp_matter:
+    version: "~1.5.1"
+>>>>>>> 680a04f6 (fixup component)
   espressif/esp_rainmaker: "^1.0.0"
-  espressif/rmaker_user_api: "^1.0.0"
+  espressif/rmaker_user_api: "^1.1.0"
