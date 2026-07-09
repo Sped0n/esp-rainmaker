@@ -1,2 +1,0 @@
-dependencies:
-  espressif/esp_matter: "~1.5.0"

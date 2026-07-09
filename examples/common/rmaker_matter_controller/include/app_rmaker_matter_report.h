@@ -6,9 +6,10 @@
 
 #pragma once
 
-#include <cJSON.h>
 #include <esp_err.h>
 #include <stdint.h>
+
+typedef struct cJSON cJSON;
 
 #ifdef __cplusplus
 extern "C" {

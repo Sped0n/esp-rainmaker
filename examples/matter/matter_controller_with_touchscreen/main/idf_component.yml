@@ -1,12 +1,15 @@
 ## IDF Component Manager Manifest File
 dependencies:
   ## Required IDF version
-  idf: ">=5.4.3,!=5.5.0,!=5.5.1,<6"
+  idf: ">=5.4.3,!=5.5.0,!=5.5.1"
 
   espressif/esp_board_manager:
     version: "~0.6.0"
   espressif/esp_lvgl_adapter: "~0.6.2"
-  espressif/esp_matter: "~1.5.0"
+  espressif/esp_rcp_update:
+    version: "~1.6.0"
+    rules:
+      - if: "idf_version >=5.0"
   espressif/esp_rainmaker:
     version: ">=1.0"
     override_path: "../../../../components/esp_rainmaker/"

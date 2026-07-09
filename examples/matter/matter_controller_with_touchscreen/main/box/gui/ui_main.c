@@ -11,6 +11,7 @@
 #include "ui_about_us.h"
 #include "ui_boot_animate.h"
 #include "ui_matter_ctrl.h"
+#include <time.h>
 #include <sys/time.h>
 #include "esp_lv_adapter.h"
 #include "freertos/FreeRTOS.h"

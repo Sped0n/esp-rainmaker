@@ -2,9 +2,13 @@
 dependencies:
   ## Required IDF version
   idf:
-    version: ">=5.4,<6"
+    version: ">=5.4"
 
-  espressif/esp_matter: "~1.5.0"
+  espressif/esp_rcp_update:
+    version: "~1.6.0"
+    rules:
+      - if: "idf_version >=5.0"
+  espressif/cjson: "1.7.19~2"
   espressif/esp_rainmaker:
     version: ">=1.0"
     override_path: "../../../../components/esp_rainmaker/"

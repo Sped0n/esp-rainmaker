@@ -141,7 +141,9 @@ static bool decode_tlv_reader_to_string(chip::TLV::TLVReader &reader, char *buf,
                 break;
             }
         }
-        reader.ExitContainer(outer_container_type);
+        if (reader.ExitContainer(outer_container_type) != CHIP_NO_ERROR) {
+            return false;
+        }
         return appendf(buf, buf_size, pos, "%c", is_object_like ? '}' : ']');
     }
     default:

@@ -17,6 +17,8 @@ menu "ESP RainMaker Config"
         config ESP_RMAKER_SELF_CLAIM
             bool "Use Self Claiming"
             depends on !IDF_TARGET_ESP32 && !IDF_TARGET_ESP32C2
+            select MBEDTLS_X509_CREATE_C
+            select MBEDTLS_X509_CSR_WRITE_C
             help
                 Use Self Claiming i.e. get the MQTT credentials
                 directly from the claiming service.
@@ -24,6 +26,8 @@ menu "ESP RainMaker Config"
         config ESP_RMAKER_ASSISTED_CLAIM
             bool "Use Assisted Claiming"
             depends on BT_ENABLED && !IDF_TARGET_ESP32S2
+            select MBEDTLS_X509_CREATE_C
+            select MBEDTLS_X509_CSR_WRITE_C
             help
                 Use Assisted Claiming i.e. get the MQTT credentials
                 from the claiming service via assistance from clients,

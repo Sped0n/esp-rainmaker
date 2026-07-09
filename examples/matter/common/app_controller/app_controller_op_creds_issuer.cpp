@@ -21,7 +21,7 @@
 #include <crypto/CHIPCryptoPAL.h>
 #include <lib/core/DataModelTypes.h>
 #include <lib/core/NodeId.h>
-#include <lib/support/ScopedBuffer.h>
+#include <lib/support/ScopedMemoryBuffer.h>
 #include <lib/support/Span.h>
 
 #define TAG "MatterController"
@@ -58,6 +58,9 @@ public:
     esp_err_t generate_controller_noc_chain(chip::NodeId node_id, chip::FabricId fabric,
                                             chip::Crypto::P256Keypair &keypair, chip::MutableByteSpan &rcac,
                                             chip::MutableByteSpan &icac, chip::MutableByteSpan &noc) override;
+    esp_err_t generate_controller_noc_chain_with_csr(chip::NodeId node_id, chip::FabricId fabric,
+                                                     chip::MutableByteSpan &csr, chip::MutableByteSpan &rcac,
+                                                     chip::MutableByteSpan &icac, chip::MutableByteSpan &noc) override;
 
     esp_err_t update_controller_noc();
 
@@ -139,7 +142,8 @@ esp_err_t app_controller_op_creds_issuer::generate_controller_noc_chain(chip::No
 
     if (app_rmaker_matter_controller_get_stored_keypair_and_controller_noc(
                 noc.data(), &noc_len, serialized_keypair.Bytes(), &serialized_keypair_len) == ESP_OK) {
-        serialized_keypair.SetLength(serialized_keypair_len);
+        ESP_RETURN_ON_FALSE(serialized_keypair.SetLength(serialized_keypair_len) == CHIP_NO_ERROR, ESP_FAIL, TAG,
+                            "Failed on setting serialized keypair length");
         ESP_RETURN_ON_FALSE(keypair.Deserialize(serialized_keypair) == CHIP_NO_ERROR, ESP_FAIL, TAG,
                             "Failed on deserializing keypair");
         noc.reduce_size(noc_len);
@@ -156,6 +160,31 @@ esp_err_t app_controller_op_creds_issuer::generate_controller_noc_chain(chip::No
                             TAG, "Failed to issue user NOC");
         noc.reduce_size(noc_der_len);
     }
+    return ESP_OK;
+}
+
+esp_err_t app_controller_op_creds_issuer::generate_controller_noc_chain_with_csr(chip::NodeId node_id,
+                                                                                 chip::FabricId fabric,
+                                                                                 chip::MutableByteSpan &csr,
+                                                                                 chip::MutableByteSpan &rcac,
+                                                                                 chip::MutableByteSpan &icac,
+                                                                                 chip::MutableByteSpan &noc)
+{
+    size_t rcac_len = rcac.size();
+    esp_err_t err = app_rmaker_matter_controller_get_stored_rcac(rcac.data(), &rcac_len);
+    if (err == ESP_OK) {
+        rcac.reduce_size(rcac_len);
+    } else {
+        ESP_RETURN_ON_ERROR(app_controller_fetch_matter_rcac(rcac), TAG, "Failed on fetching RCAC");
+    }
+
+    icac.reduce_size(0);
+
+    size_t noc_der_len = noc.size();
+    ESP_RETURN_ON_ERROR(app_rmaker_matter_controller_issue_controller_noc(csr.data(), csr.size(), noc.data(),
+                                                                          &noc_der_len, node_id, NULL, 0),
+                        TAG, "Failed to issue controller NOC from CSR");
+    noc.reduce_size(noc_der_len);
     return ESP_OK;
 }
 

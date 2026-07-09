@@ -2,10 +2,9 @@
 dependencies:
   ## Required IDF version
   idf:
-    version: ">=5.4,<6"
+    version: ">=5.4"
 
   espressif/button: "^4.1.4"
-  espressif/esp_matter: "~1.5.0"
   espressif/esp_rainmaker:
     version: ">=1.0"
     override_path: "../../../../components/esp_rainmaker/"

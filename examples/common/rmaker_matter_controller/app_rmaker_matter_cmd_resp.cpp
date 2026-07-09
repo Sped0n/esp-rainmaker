@@ -30,7 +30,7 @@
 #include <app/server/Server.h>
 #include <lib/core/DataModelTypes.h>
 #include <lib/core/Optional.h>
-#include <lib/support/ScopedBuffer.h>
+#include <lib/support/ScopedMemoryBuffer.h>
 #include <lib/support/CHIPMem.h>
 #include <lib/core/NodeId.h>
 #include <lib/core/TLVReader.h>

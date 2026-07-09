@@ -58,13 +58,13 @@ static bool mark_online_locked(node_state_t *ns, char *rainmaker_node_id, size_t
     return true;
 }
 
-static void on_subscribe_connect_failure_cb(void *context)
+static void on_subscribe_connect_failure_cb(void *context, const chip::ScopedNodeId &peer_id, CHIP_ERROR error)
 {
     (void)context;
-    ESP_LOGW(TAG, "Subscribe connect failed");
+    ESP_LOGW(TAG, "Subscribe connect failed for 0x%llX: %s", (unsigned long long)peer_id.GetNodeId(), error.AsString());
     report_msg_t refresh = {};
     refresh.msg_type = REPORT_MSG_SUBSCRIBE_CONNECT_FAILED;
-    refresh.node_id = 0; /* esp-matter 1.5 callback does not expose node id; retry all offline nodes. */
+    refresh.node_id = peer_id.GetNodeId();
     if (s_report_queue) {
         xQueueSend(s_report_queue, &refresh, 0);
     }
@@ -124,8 +124,11 @@ static void report_online(uint64_t remote_node_id)
 }
 
 static void on_attribute_data_cb(uint64_t remote_node_id, const chip::app::ConcreteDataAttributePath &path,
-                                 chip::TLV::TLVReader *data)
+                                  chip::TLV::TLVReader *data, const chip::app::StatusIB &status)
 {
+    if (!status.IsSuccess()) {
+        return;
+    }
     if (should_ignore_attribute(path.mEndpointId, path.mClusterId, path.mAttributeId)) {
         return;
     }
@@ -144,7 +147,7 @@ esp_err_t app_rmaker_matter_report_subscribe_send_wildcard(uint64_t node_id)
     attr_paths[0] = chip::app::AttributePathParams(0xFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
     subscribe_command *cmd = chip::Platform::New<subscribe_command>(node_id, std::move(attr_paths), std::move(event_paths),
                                                                     0, 600, false, on_attribute_data_cb,
-                                                                    nullptr, on_subscribe_done_cb,
+                                                                    nullptr, nullptr, on_subscribe_done_cb,
                                                                     on_subscribe_connect_failure_cb);
     if (!cmd) {
         return ESP_ERR_NO_MEM;
