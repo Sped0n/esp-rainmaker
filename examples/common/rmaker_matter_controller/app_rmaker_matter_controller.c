@@ -338,8 +338,7 @@ static esp_err_t bulk_write_cb(const esp_rmaker_device_t *device, const esp_rmak
 }
 
 esp_err_t app_rmaker_matter_controller_issue_controller_noc(const uint8_t *csr_der, size_t csr_der_len,
-                                                            uint8_t *noc_der, size_t *noc_der_len, uint64_t node_id,
-                                                            uint8_t *serialized_keypair, size_t serialized_keypair_len)
+                                                            uint8_t *noc_der, size_t *noc_der_len, uint64_t node_id)
 {
     if (!check_handle_state()) {
         return ESP_ERR_INVALID_STATE;
@@ -358,34 +357,7 @@ esp_err_t app_rmaker_matter_controller_issue_controller_noc(const uint8_t *csr_d
                                                  &s_matter_controller_handle->matter_node_id, noc_der, noc_der_len),
                         TAG, "Failed to issue NOC");
 
-    if (!s_matter_controller_handle->is_server_instance &&
-        (rmaker_matter_controller_set_nvs(MATTER_CTL_NVS_KEY_NOC, noc_der, *noc_der_len) != ESP_OK ||
-         rmaker_matter_controller_set_nvs(MATTER_CTL_NVS_KEY_KEYPAIR, serialized_keypair, serialized_keypair_len) !=
-             ESP_OK)) {
-        // Still return ESP_OK if failed to store NOC or keypair
-        ESP_LOGW(TAG, "Failed to store NOC or keypair");
-    }
     return ESP_OK;
-}
-
-esp_err_t app_rmaker_matter_controller_get_stored_keypair_and_controller_noc(uint8_t *noc_der, size_t *noc_der_len,
-                                                                             uint8_t *serialized_keypair,
-                                                                             size_t *serialized_keypair_len)
-{
-    if (!noc_der || !noc_der_len || !serialized_keypair || !serialized_keypair_len) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    esp_err_t err = ESP_OK;
-    err = rmaker_matter_controller_get_nvs(MATTER_CTL_NVS_KEY_NOC, noc_der, noc_der_len);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to get stored NOC, maybe not installed yet");
-        return err;
-    }
-    err = rmaker_matter_controller_get_nvs(MATTER_CTL_NVS_KEY_KEYPAIR, serialized_keypair, serialized_keypair_len);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to get stored keypair, maybe not installed yet");
-    }
-    return err;
 }
 
 esp_err_t app_rmaker_matter_controller_fetch_rcac(uint8_t *rcac_der, size_t *rcac_der_len)

@@ -19,6 +19,19 @@ static const char *TAG = "box_platform";
 static lv_display_t *s_display;
 static bool initialized = false;
 
+#if CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUB_RGB_SUPPORT
+static esp_lv_adapter_tear_avoid_mode_t lcd_get_tear_mode(uint8_t num_fbs)
+{
+    if (num_fbs >= 3) {
+        return ESP_LV_ADAPTER_TEAR_AVOID_MODE_TRIPLE_PARTIAL;
+    }
+    if (num_fbs == 2) {
+        return ESP_LV_ADAPTER_TEAR_AVOID_MODE_DOUBLE_PARTIAL;
+    }
+    return ESP_LV_ADAPTER_TEAR_AVOID_MODE_NONE;
+}
+#endif
+
 esp_err_t box_platform_init(void)
 {
     if (initialized) {
@@ -48,14 +61,23 @@ esp_err_t box_platform_init(void)
     if (strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_SPI) == 0 ||
             strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_PARLIO) == 0) {
         esp_lv_adapter_display_config_t display_cfg = ESP_LV_ADAPTER_DISPLAY_SPI_WITH_PSRAM_DEFAULT_CONFIG(
-                                                          lcd_handles->panel_handle, lcd_handles->io_handle,
-                                                          lcd_cfg->lcd_width, lcd_cfg->lcd_height, rotation);
+                                                           lcd_handles->panel_handle, lcd_handles->io_handle,
+                                                           lcd_cfg->lcd_width, lcd_cfg->lcd_height, rotation);
         s_display = esp_lv_adapter_register_display(&display_cfg);
     }
+#if CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUB_RGB_SUPPORT
+    else if (strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_RGB) == 0) {
+        esp_lv_adapter_display_config_t display_cfg = ESP_LV_ADAPTER_DISPLAY_RGB_DEFAULT_CONFIG(
+                                                          lcd_handles->panel_handle, lcd_handles->io_handle,
+                                                          lcd_cfg->lcd_width, lcd_cfg->lcd_height, rotation);
+        display_cfg.tear_avoid_mode = lcd_get_tear_mode(lcd_cfg->sub_cfg.rgb.panel_config.num_fbs);
+        s_display = esp_lv_adapter_register_display(&display_cfg);
+    }
+#endif
 #if CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUB_DSI_SUPPORT
     else if (strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_DSI) == 0) {
         esp_lv_adapter_display_config_t display_cfg = ESP_LV_ADAPTER_DISPLAY_MIPI_DEFAULT_CONFIG(
-                                                          lcd_handles->panel_handle, lcd_handles->io_handle,
+                                                           lcd_handles->panel_handle, lcd_handles->io_handle,
                                                           lcd_cfg->lcd_width, lcd_cfg->lcd_height, rotation);
         display_cfg.tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_NONE;
         s_display = esp_lv_adapter_register_display(&display_cfg);

@@ -22,8 +22,6 @@ extern "C" {
 // esp_rmaker_internal.h, which is a private header file, so we define it here.
 #define MATTER_CTL_NVS_PART_NAME "nvs"
 #define MATTER_CTL_NVS_NAMESPACE "rm-matter-ctl"
-#define MATTER_CTL_NVS_KEY_NOC "ctl-noc"
-#define MATTER_CTL_NVS_KEY_KEYPAIR "ctl-kp"
 #define MATTER_CTL_NVS_KEY_RCAC "ctl-rcac"
 
 typedef enum {

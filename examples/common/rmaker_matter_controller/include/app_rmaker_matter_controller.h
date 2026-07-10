@@ -100,10 +100,6 @@ esp_err_t app_rmaker_matter_controller_fetch_rcac(uint8_t *rcac_der, size_t *rca
 /**
  * @brief Issue NOC in DER format for the rainmaker matter controller from Rainmaker cloud.
  *
- * If NOC is issued successfully, the serialized keypair and issued NOC will be stored in the NVS for client-only
- * controller. For server instance controller, it is not necessary to store NOC and keypair in NVS, because they will be
- * stored in the Fabric Table after the Fabric is committed.
- *
  * @param[in] csr_der The pointer to the CSR in DER format
  * @param[in] csr_der_len The length of the CSR
  * @param[out] noc_der The pointer to the NOC in DER format
@@ -112,37 +108,12 @@ esp_err_t app_rmaker_matter_controller_fetch_rcac(uint8_t *rcac_der, size_t *rca
  * @param[in] node_id The matter node ID for the Matter controller, only used for server instance controller and value
  * 0 (undefined node Id) means rainmaker should create a matter node for the controller. Ignored for client-only
  * controller.
- * @param[in] serialized_keypair The pointer to the serialized keypair, only used for client-only controller. Ignored
- * for server instance controller.
- * @param[in] serialized_keypair_len The length of the serialized keypair buffer, only used for client-only controller.
- * Ignored for server instance controller.
  *
  * @return ESP_OK on success
  * @return error in case of failure
  */
 esp_err_t app_rmaker_matter_controller_issue_controller_noc(const uint8_t *csr_der, size_t csr_der_len,
-                                                            uint8_t *noc_der, size_t *noc_der_len, uint64_t node_id,
-                                                            uint8_t *serialized_keypair, size_t serialized_keypair_len);
-
-/**
- * @brief Get the stored keypair and NOC from the NVS
- *
- * If failed to get keypair and NOC from the NVS, call app_rmaker_matter_controller_issue_controller_noc() to issue NOC
- * from Rainmaker cloud.
- *
- * @param[out] noc_der The pointer to the NOC in DER format
- * @param[in,out] noc_der_len The length of the NOC buffer as input and the length of the got NOC in DER format as
- * output
- * @param[out] serialized_keypair The pointer to the serialized keypair
- * @param[in,out] serialized_keypair_len The length of the serialized keypair buffer as input and the length of the got
- * serialized keypair as output
- *
- * @return ESP_OK on success
- * @return error in case of failure
- */
-esp_err_t app_rmaker_matter_controller_get_stored_keypair_and_controller_noc(uint8_t *noc_der, size_t *noc_der_len,
-                                                                             uint8_t *serialized_keypair,
-                                                                             size_t *serialized_keypair_len);
+                                                            uint8_t *noc_der, size_t *noc_der_len, uint64_t node_id);
 
 #ifdef __cplusplus
 }
