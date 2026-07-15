@@ -104,23 +104,52 @@ static void set_onoff_work(intptr_t arg)
 
     auto on_success = [](void *, const chip::app::ConcreteCommandPath &, const chip::app::StatusIB & status,
     chip::TLV::TLVReader *) {
-        if (!status.IsSuccess()) {
+        if (status.IsSuccess()) {
+            ESP_LOGI(TAG, "OnOff command succeeded");
+        } else {
             ESP_LOGW(TAG, "OnOff command returned failure status");
         }
     };
     auto on_error = [](void *, CHIP_ERROR error) {
         ESP_LOGW(TAG, "OnOff command failed: %s", chip::ErrorStr(error));
     };
+    auto on_connect_failure = [](void *, const chip::ScopedNodeId & peer_id, CHIP_ERROR error) {
+        ESP_LOGW(TAG, "Failed to connect to OnOff node 0x%016" PRIx64 ": %s",
+                 peer_id.GetNodeId(), chip::ErrorStr(error));
+    };
 
     const uint32_t command_id = target->onoff ? OnOff::Commands::On::Id : OnOff::Commands::Off::Id;
     auto *cmd = chip::Platform::New<esp_matter::controller::cluster_command>(
-                    target->node_id, target->endpoint_id, OnOff::Id, command_id, nullptr, chip::NullOptional, on_success, on_error);
+                    target->node_id, target->endpoint_id, OnOff::Id, command_id, nullptr,
+                    chip::NullOptional, on_success, on_error, on_connect_failure);
     if (cmd) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(cmd->send_command());
+        esp_err_t err = cmd->send_command();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to initiate OnOff command: %s", esp_err_to_name(err));
+        }
     } else {
         ESP_LOGE(TAG, "Failed to allocate OnOff command");
     }
     free(target);
+}
+
+static esp_err_t schedule_onoff(uint64_t node_id, uint16_t endpoint_id, bool onoff)
+{
+    onoff_target_t *target = (onoff_target_t *)heap_caps_calloc_prefer(1, sizeof(onoff_target_t), 2,
+                                                                       MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM,
+                                                                       MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL);
+    ESP_RETURN_ON_FALSE(target, ESP_ERR_NO_MEM, TAG, "Failed to allocate OnOff target");
+    target->node_id = node_id;
+    target->endpoint_id = endpoint_id;
+    target->onoff = onoff;
+
+    CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(set_onoff_work, (intptr_t)target);
+    if (err != CHIP_NO_ERROR) {
+        free(target);
+        ESP_LOGW(TAG, "Failed to schedule OnOff command: %s", chip::ErrorStr(err));
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 esp_err_t matter_onoff_primary_action(uint64_t node_id, uint16_t endpoint_id)
@@ -145,19 +174,16 @@ esp_err_t matter_onoff_primary_action(uint64_t node_id, uint16_t endpoint_id)
     if (changed) {
         ui_matter_device_state_update(node_id, endpoint_id);
     }
-    onoff_target_t *target = (onoff_target_t *)heap_caps_calloc_prefer(1, sizeof(onoff_target_t), 2,
-                                                                       MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM,
-                                                                       MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL);
-    ESP_RETURN_ON_FALSE(target, ESP_ERR_NO_MEM, TAG, "Failed to allocate OnOff target");
-    target->node_id = node_id;
-    target->endpoint_id = endpoint_id;
-    target->onoff = desired;
+    return schedule_onoff(node_id, endpoint_id, desired);
+}
 
-    CHIP_ERROR err = chip::DeviceLayer::PlatformMgr().ScheduleWork(set_onoff_work, (intptr_t)target);
-    if (err != CHIP_NO_ERROR) {
-        free(target);
-        ESP_LOGW(TAG, "Failed to schedule OnOff command: %s", chip::ErrorStr(err));
-        return ESP_FAIL;
+esp_err_t matter_onoff_set(uint64_t node_id, uint16_t endpoint_id, bool onoff)
+{
+    ESP_LOGI(TAG, "matter_onoff_set: node_id: %llx, endpoint_id: %u, onoff: %d", node_id, endpoint_id, onoff);
+    matter_device_vm_item_t item = {};
+    if (!matter_vm_get_device(node_id, endpoint_id, &item) || !item.is_online ||
+            !matter_device_type_is_onoff(item.device_type)) {
+        return ESP_ERR_INVALID_STATE;
     }
-    return ESP_OK;
+    return schedule_onoff(node_id, endpoint_id, onoff);
 }

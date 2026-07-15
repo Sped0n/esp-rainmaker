@@ -1,0 +1,8 @@
+dependencies:
+  espressif/esp_codec_dev:
+    version: '~1.5.11'
+    require: public
+  espressif/esp-sr: '2.4.4'
+  espressif/gmf_ai_audio: '0.8.3'
+  espressif/gmf_audio: ^0.8
+  espressif/gmf_core: ~0.8.4

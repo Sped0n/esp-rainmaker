@@ -12,7 +12,7 @@ set(PRIV_INCLUDE_DIRS_LIST "."
 
 idf_component_register(SRC_DIRS ${SRCS_DIRS_LIST}
                        PRIV_INCLUDE_DIRS ${PRIV_INCLUDE_DIRS_LIST}
-                       REQUIRES app_controller chip esp_matter esp_matter_console esp_matter_controller esp_rainmaker nvs_flash openthread
+                       REQUIRES agent_ng app_controller audio_ng chip esp_matter esp_matter_console esp_matter_controller esp_rainmaker nvs_flash openthread
                        LDFRAGMENTS "${ldfragments}")
 
 

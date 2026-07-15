@@ -1,0 +1,9 @@
+menu "Matter Touchscreen Agent Configuration"
+
+    config APP_AGENT_ID
+        string "Agent ID"
+        default "LZ2Z36A53GWTQ5C8ZH7M5FZGMKOP951Q"
+        help
+            Cloud agent identifier used after RainMaker credentials become available.
+
+endmenu

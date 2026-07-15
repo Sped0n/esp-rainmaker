@@ -125,9 +125,6 @@ esp_err_t app_controller_client_setup(uint8_t *ipk, size_t ipk_len, uint64_t fab
                                                                                                 stored_fabric_index);
     }
 exit:
-    if (ret == ESP_OK) {
-        app_rmaker_matter_device_list_update();
-    }
     return ret;
 }
 

@@ -5,6 +5,7 @@ dependencies:
 
   espressif/esp_board_manager:
     version: "~0.6.0"
+    require: public
   espressif/esp_lvgl_adapter: "~0.6.2"
   espressif/esp_rcp_update:
     version: "~1.6.0"

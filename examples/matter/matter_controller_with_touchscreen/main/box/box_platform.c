@@ -39,6 +39,8 @@ esp_err_t box_platform_init(void)
     }
 
     esp_lv_adapter_config_t lvgl_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG();
+    lvgl_cfg.task_priority = 9;
+    lvgl_cfg.task_core_id = 1;
 
     ESP_RETURN_ON_ERROR(esp_board_manager_init(), TAG, "Failed to init board manager");
     ESP_RETURN_ON_ERROR(esp_lv_adapter_init(&lvgl_cfg), TAG, "Failed to init LVGL");

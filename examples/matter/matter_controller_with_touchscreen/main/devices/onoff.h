@@ -13,6 +13,7 @@ extern "C" {
 
 void matter_onoff_on_attr_report(const app_rmaker_matter_report_t *report);
 esp_err_t matter_onoff_primary_action(uint64_t node_id, uint16_t endpoint_id);
+esp_err_t matter_onoff_set(uint64_t node_id, uint16_t endpoint_id, bool onoff);
 
 #ifdef __cplusplus
 }

@@ -7,6 +7,7 @@
 */
 
 #include <app_matter_ctrl.h>
+#include <app_agent.h>
 #include <box_main.h>
 #include <ui_main.h>
 #include <ui_matter_ctrl.h>
@@ -50,6 +51,23 @@ static void *cjson_malloc(size_t size)
 {
     return heap_caps_malloc_prefer(size, 2, MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM,
                                    MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL);
+}
+
+static void chip_log_redirect(const char *module, uint8_t category, const char *msg, va_list args)
+{
+    if (module && strcmp(module, "TOO") == 0) {
+        return;
+    }
+    if (module && strcmp(module, "DMG") == 0) {
+        return;
+    }
+    if (module && strcmp(module, "DIS") == 0) {
+        return;
+    }
+    if (module && strcmp(module, "EM") == 0) {
+        return;
+    }
+    chip::Logging::Platform::LogV(module, category, msg, args);
 }
 
 static void app_init_cjson_hooks(void)
@@ -153,7 +171,6 @@ extern "C" void app_main()
         abort();
     }
 
-    /* Enable system service. */
     esp_rmaker_system_serv_config_t system_serv_config = {
         .flags = SYSTEM_SERV_FLAGS_ALL,
         .reboot_seconds = 0,
@@ -190,6 +207,9 @@ extern "C" void app_main()
     /* Initialize display and touchscreen UI. */
     box_main();
 
+    /* Initialize deferred audio/agent orchestration. */
+    ESP_ERROR_CHECK_WITHOUT_ABORT(app_agent_init(node));
+
     /* Start ESP RainMaker. */
     esp_rmaker_auth_service_enable();
     esp_rmaker_start();
@@ -206,6 +226,7 @@ extern "C" void app_main()
 
     /* Start Matter. */
     matter_ctrl_set_provisioned(true);
+    chip::Logging::SetLogRedirectCallback(chip_log_redirect);
     ESP_ERROR_CHECK(esp_matter::start(NULL));
     esp_matter::console::diagnostics_register_commands();
     esp_matter::console::init();

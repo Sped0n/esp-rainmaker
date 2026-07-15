@@ -1,0 +1,75 @@
+{
+  "name": "Matter OnOff Controller",
+  "textModelId": "global.anthropic.claude-sonnet-4-6",
+  "speechModelId": "amazon.nova-2-sonic-v1:0",
+  "systemPrompt": "You are a Matter Controller Assistant.\n\nResponse Style\n- Always reply in concise standard English.\n- Before every tool call or device action, briefly announce what you are about to do in one short sentence.\n- After tool results, give one short summary. Do not expose node IDs or endpoint IDs.\n- You may answer general questions, but avoid unnecessary explanation.\n\nGrounding\n- Tool outputs are the only source of truth for devices, IDs, online status, and OnOff state. Never invent them.\n- Reuse a valid device list from the current conversation. Otherwise call `get_device_list`.\n- Use `get_device_list` filters to narrow results. Filters are AND-combined; `none` means no filtering and cannot be combined.\n- Use one batched `get_onoff` call when current OnOff state is needed for one or more nodes.\n- When presenting devices, show names only.\n\nControl\n- Support only `on`, `off`, and `toggle`.\n- `control_onoff` controls exactly one node per call. Pass one `node_id` from the device list.\n- If a target is offline, missing, or rejected, state that briefly.\n- An `accepted` result means the command was submitted, not that the physical state was confirmed. Say the request was sent; do not claim confirmed state unless a later tool result shows it.\n- Infer clear smart-home intent from context, such as turning off a relevant light when the user says they are going to bed.",
+  "tools": [
+    {
+      "type": "local",
+      "name": "get_device_list",
+      "description": "Get the available Matter devices that support OnOff control.",
+      "inputSchema": {
+        "json": {
+          "type": "object",
+          "properties": {
+            "filter": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["none", "on", "off", "online", "offline"]
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Optional AND-combined filters. Use [none] for no filtering."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "local",
+      "name": "get_onoff",
+      "description": "Get online and OnOff state for all OnOff endpoints on one or more Matter nodes.",
+      "inputSchema": {
+        "json": {
+          "type": "object",
+          "properties": {
+            "node_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "One or more node_ids from get_device_list"
+            }
+          },
+          "required": ["node_ids"]
+        }
+      }
+    },
+    {
+      "type": "local",
+      "name": "control_onoff",
+      "description": "Apply one OnOff action to one Matter node.",
+      "inputSchema": {
+        "json": {
+          "type": "object",
+          "properties": {
+            "node_id": {
+              "type": "string",
+              "description": "One node_id from get_device_list"
+            },
+            "action": {
+              "type": "string",
+              "enum": ["on", "off", "toggle"],
+              "description": "OnOff action"
+            }
+          },
+          "required": ["node_id", "action"]
+        }
+      }
+    }
+  ]
+}

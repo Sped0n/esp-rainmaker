@@ -1,0 +1,7 @@
+menu "Agent NG Configuration"
+
+config AGENT_NG_API_ENDPOINT
+    string "Agent API endpoint"
+    default "api.agents.espressif.com"
+
+endmenu

@@ -9,6 +9,7 @@
 #include <app_matter_ctrl.h>
 #include <app_matter_device_list.h>
 #include <app_matter_view_model.h>
+#include <app_agent.h>
 #include <devices/onoff.h>
 #include <ui_matter_ctrl.h>
 
@@ -105,6 +106,7 @@ void matter_ctrl_on_device_list_update(esp_err_t err, const matter_device_t *dev
         }
     } else {
         matter_device_list_rebuild(dev_list);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(app_agent_enable());
     }
 
     if (s_refresh_ui_task_handle) {

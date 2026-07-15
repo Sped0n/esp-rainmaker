@@ -82,18 +82,19 @@ static void btn_event_cb(lv_event_t *e)
 void ui_about_us_start(void (*fn)(void))
 {
     g_about_us_end_cb = fn;
+    const ui_layout_t *layout = ui_main_get_layout();
 
     lv_obj_t *page = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(page, 290, 174);
+    lv_obj_set_size(page, layout->page_width, layout->page_height);
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_radius(page, 15, LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(page, ui_layout_scale(15), LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(page, 0, LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_width(page, 20, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(page, ui_layout_scale(20), LV_PART_MAIN);
     lv_obj_set_style_shadow_opa(page, LV_OPA_30, LV_PART_MAIN);
     lv_obj_align_to(page, ui_main_get_status_bar(), LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
 
     lv_obj_t *btn_return = lv_btn_create(page);
-    lv_obj_set_size(btn_return, 24, 24);
+    lv_obj_set_size(btn_return, ui_layout_scale(24), ui_layout_scale(24));
     lv_obj_add_style(btn_return, &ui_button_styles()->style, 0);
     lv_obj_add_style(btn_return, &ui_button_styles()->style_pr, LV_STATE_PRESSED);
     lv_obj_add_style(btn_return, &ui_button_styles()->style_focus, LV_STATE_FOCUS_KEY);
@@ -101,6 +102,7 @@ void ui_about_us_start(void (*fn)(void))
     lv_obj_align(btn_return, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_t *lab_btn_text = lv_label_create(btn_return);
     lv_label_set_text_static(lab_btn_text, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(lab_btn_text, layout->body_font, LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(lab_btn_text, lv_color_make(158, 158, 158), LV_STATE_DEFAULT);
     lv_obj_center(lab_btn_text);
     lv_obj_add_event_cb(btn_return, ui_about_us_page_return_click_cb, LV_EVENT_CLICKED, page);
@@ -110,9 +112,12 @@ void ui_about_us_start(void (*fn)(void))
     }
 
     lv_obj_t *img = lv_img_create(page);
-    lv_obj_align(img, LV_ALIGN_TOP_MID, 0, 20);
+    lv_obj_align(img, LV_ALIGN_TOP_MID, 0, ui_layout_scale(20));
     LV_IMG_DECLARE(icon_box);
     lv_img_set_src(img, &icon_box);
+    if (layout->is_large) {
+        lv_image_set_scale(img, layout->scale);
+    }
 
     char msg[256] = {0};
     snprintf(msg, sizeof(msg),
@@ -126,7 +131,8 @@ void ui_about_us_start(void (*fn)(void))
     lv_obj_t *lab = lv_label_create(page);
     lv_label_set_recolor(lab, true);
     lv_label_set_text(lab, msg);
-    lv_obj_align(lab, LV_ALIGN_BOTTOM_LEFT, 0, -10);
+    lv_obj_set_style_text_font(lab, layout->body_font, LV_STATE_DEFAULT);
+    lv_obj_align(lab, LV_ALIGN_BOTTOM_LEFT, 0, -ui_layout_scale(10));
 
     lv_obj_t *reset_button = lv_btn_create(page);
     lv_obj_set_style_bg_color(reset_button, lv_palette_main(LV_PALETTE_RED), LV_STATE_DEFAULT);
@@ -134,11 +140,11 @@ void ui_about_us_start(void (*fn)(void))
     lv_obj_set_style_border_width(reset_button, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(reset_button, lv_palette_darken(LV_PALETTE_RED, 3), LV_PART_MAIN);
     lv_obj_align(reset_button, LV_ALIGN_TOP_RIGHT, 0, 0);
-    lv_obj_set_size(reset_button, 58, 28);
+    lv_obj_set_size(reset_button, ui_layout_scale(58), ui_layout_scale(28));
     lv_obj_t *reset_label = lv_label_create(reset_button);
     lv_label_set_text_static(reset_label, "Reset");
     lv_obj_set_style_text_color(reset_label, lv_color_white(), LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(reset_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(reset_label, layout->body_font, LV_STATE_DEFAULT);
     lv_obj_center(reset_label);
     lv_obj_add_event_cb(reset_button, btn_event_cb, LV_EVENT_CLICKED, NULL);
 
